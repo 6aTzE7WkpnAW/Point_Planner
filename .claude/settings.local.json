@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(head:*)",
+      "Bash(ls:*)",
+      "Bash(node --version && npm --version 2>&1)",
+      "Bash(cd /c/Users/sotas/projects/point_planner && npx create-next-app@latest web --typescript --tailwind --eslint --app --no-src-dir --import-alias \"@/*\" --no-turbopack 2>&1)",
+      "Bash(cd /c/Users/sotas/projects/point_planner && echo \"N\" | npx create-next-app@latest web --typescript --tailwind --eslint --app --no-src-dir --import-alias \"@/*\" --no-turbopack 2>&1)",
+      "Bash(cd /c/Users/sotas/projects/point_planner/web && npm run build 2>&1)",
+      "Bash(curl:*)",
+      "Bash(pkill:*)",
+      "Bash(timeout 30 python:*)",
+      "Bash(timeout 60 python:*)",
+      "Bash(netstat -ano 2>/dev/null | grep \":3001\" | head -3 || echo \"no netstat\")",
+      "Bash(taskkill:*)",
+      "Bash(echo:*)",
+      "Bash(grep LISTEN:*)",
+      "Bash(cd:*)"
+    ]
+  }
+}
