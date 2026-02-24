@@ -312,15 +312,23 @@ export function solve(n: number, params: Params, startPoints = 0): SolveResult |
   const P = params.unitPriceTaxIn;
   const startP = Math.min(Math.max(0, Math.floor(startPoints)), n * P);
 
+  // ---------------------------------------------------------------------------
+  // 量子化ステップ Q の決定
+  // N≤70 は精密解（Q=1）。N>70 は ops ≈ n × (n×P/Q) × 110 ≤ 60M を目標に設定。
+  // 定数 550_000 = 60_000_000 / 110（110 = q候補数~22 × cash候補数~5）
+  // ---------------------------------------------------------------------------
+  const Q = n <= 70 ? 1 : Math.max(1, Math.ceil(n * n * P / 550_000));
+  const startPQ = Q > 1 ? Math.round(startP / Q) * Q : startP;
+
   // 数値キーエンコード: key = p (各 layer で独立管理)
   // layer[i] : p → { cost, parent }
   type LayerEntry = { cost: number; parent: ParentInfo | null };
   const layers: Map<number, LayerEntry>[] = Array.from({ length: n + 1 }, () => new Map());
-  layers[0].set(startP, { cost: 0, parent: null });
+  layers[0].set(startPQ, { cost: 0, parent: null });
 
   // 各 i でのフロンティア（支配関係の管理）
   const frontiers: Frontier[] = Array.from({ length: n + 1 }, () => new Frontier());
-  frontiers[0].insert(startP, 0);
+  frontiers[0].insert(startPQ, 0);
 
   const TIME_LIMIT_MS = 8000; // 8 秒で打ち切り → exact: false で返す
   let isExact = true;
@@ -357,8 +365,11 @@ export function solve(n: number, params: Params, startPoints = 0): SolveResult |
 
           const earned = calcPointsEarned(cash, orderTotal, params, num, den);
           let p2 = p - used + earned;
-          // 中間ステップのみキャップ。最終ステップは実際の値を保持。
-          if (!isFinalStep && p2 > remainingTotal) p2 = remainingTotal;
+          // 中間ステップのみ量子化＋キャップ。最終ステップは実際の値を保持。
+          if (!isFinalStep) {
+            if (Q > 1) p2 = Math.round(p2 / Q) * Q;
+            if (p2 > remainingTotal) p2 = remainingTotal;
+          }
 
           const cost2 = cost + cash;
 
