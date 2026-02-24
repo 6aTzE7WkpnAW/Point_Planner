@@ -4,6 +4,7 @@ import { useState, useCallback } from "react";
 import InputForm from "@/components/InputForm";
 import TotalForm from "@/components/TotalForm";
 import Summary from "@/components/Summary";
+import Charts from "@/components/Charts";
 import ResultTable from "@/components/ResultTable";
 import type { Params, SolveResult } from "@/types";
 import { DEFAULT_PARAMS } from "@/types";
@@ -229,6 +230,8 @@ export default function Home() {
         {state === "result" && result && (
           <div className="space-y-4">
             <Summary result={result} />
+
+            <Charts result={result} />
 
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
               <div className="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between">
