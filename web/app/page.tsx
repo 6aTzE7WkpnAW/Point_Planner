@@ -4,7 +4,6 @@ import { useState, useCallback } from "react";
 import InputForm from "@/components/InputForm";
 import TotalForm from "@/components/TotalForm";
 import Summary from "@/components/Summary";
-import Charts from "@/components/Charts";
 import ResultTable from "@/components/ResultTable";
 import type { Params, SolveResult } from "@/types";
 import { DEFAULT_PARAMS } from "@/types";
@@ -231,9 +230,7 @@ export default function Home() {
           <div className="space-y-4">
             <Summary result={result} />
 
-            <Charts result={result} />
-
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+<div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
               <div className="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-gray-800">注文内訳</h2>
                 <span className="text-xs text-gray-400 tabular-nums">
