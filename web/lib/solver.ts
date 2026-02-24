@@ -233,6 +233,77 @@ type ParentInfo = {
 };
 
 // ---------------------------------------------------------------------------
+// 連続ポイント未使用注文の統合（後処理）
+// ---------------------------------------------------------------------------
+
+/**
+ * 連続する「ポイント未使用 かつ 付与対象」の注文をまとめて1注文に統合する。
+ *
+ * eligible=false の注文は除外する。統合すると注文合計が付与閾値を超えてポイントが
+ * 新たに発生し、DP が想定していた残高と乖離するため。
+ *
+ * eligible=true の連続注文を統合しても floor の超加法性から獲得ポイントは
+ * 統合前の合計以上になるため、キャッシュ支払い総額は不変かつポイント残高は改善。
+ */
+function consolidateOrders(
+  orders: OrderRow[],
+  params: Params,
+  num: number,
+  den: number,
+  startPoints: number
+): OrderRow[] {
+  if (orders.length <= 1) return orders;
+
+  // Step 1: 統合後の (qty, cashPaid, pointsUsed) リストを構築
+  type Step = { qty: number; cashPaid: number; pointsUsed: number };
+  const steps: Step[] = [];
+  let i = 0;
+
+  while (i < orders.length) {
+    if (orders[i].pointsUsed === 0 && orders[i].eligible) {
+      // 連続する eligible かつ pointsUsed=0 の注文を収集
+      let j = i + 1;
+      while (j < orders.length && orders[j].pointsUsed === 0 && orders[j].eligible) j++;
+
+      if (j > i + 1) {
+        const run = orders.slice(i, j);
+        steps.push({
+          qty: run.reduce((s, o) => s + o.qty, 0),
+          cashPaid: run.reduce((s, o) => s + o.cashPaid, 0),
+          pointsUsed: 0,
+        });
+        i = j;
+        continue;
+      }
+    }
+    steps.push({ qty: orders[i].qty, cashPaid: orders[i].cashPaid, pointsUsed: orders[i].pointsUsed });
+    i++;
+  }
+
+  if (steps.length === orders.length) return orders; // 統合なし
+
+  // Step 2: 再シミュレーションで各注文のポイント残高を再計算
+  let pBal = startPoints;
+  return steps.map((step, idx) => {
+    const { qty, cashPaid, pointsUsed } = step;
+    const orderTotal = cashPaid + pointsUsed;
+    const eligible = isEligible(orderTotal, cashPaid, params.minEligibleTotal, params.eligibleBasis);
+    const earned = calcPointsEarned(cashPaid, orderTotal, params, num, den);
+    pBal = pBal - pointsUsed + earned;
+    return {
+      index: idx + 1,
+      qty,
+      orderTotal,
+      pointsUsed,
+      cashPaid,
+      pointsEarned: earned,
+      pointsBalance: pBal,
+      eligible,
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
 // メインソルバー（レイヤー別 DP）
 // ---------------------------------------------------------------------------
 export function solve(n: number, params: Params, startPoints = 0): SolveResult | null {
@@ -386,14 +457,20 @@ export function solve(n: number, params: Params, startPoints = 0): SolveResult |
     });
   }
 
+  // 後処理: 連続するポイント未使用注文を統合
+  const consolidatedOrders = consolidateOrders(orders, params, num, den, startP);
+  const leftoverPoints = consolidatedOrders.length > 0
+    ? consolidatedOrders[consolidatedOrders.length - 1].pointsBalance
+    : startP;
+
   return {
     summary: {
-      orderCount: orders.length,
+      orderCount: consolidatedOrders.length,
       cashTotal,
-      leftoverPoints: pBal,
+      leftoverPoints,
       grossTotal: n * P,
     },
-    orders,
+    orders: consolidatedOrders,
     meta: {
       exact: isExact,
       timeMs: Date.now() - startMs,
