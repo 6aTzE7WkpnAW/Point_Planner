@@ -26,6 +26,7 @@ export default function InputForm({
   const [additional, setAdditional] = useState(String(initialAdditional));
   const [purchased, setPurchased] = useState(String(initialPurchased));
   const [points, setPoints] = useState(String(initialPoints));
+  const [pointsAutoFilled, setPointsAutoFilled] = useState(true);
   const [unitPrice, setUnitPrice] = useState(String(p.unitPriceTaxIn));
   const [taxRate, setTaxRate] = useState(String(Math.round(p.taxRate * 100)));
   const [pointRate, setPointRate] = useState(String(Math.round(p.pointRate * 100)));
@@ -33,6 +34,39 @@ export default function InputForm({
   const [objective, setObjective] = useState<Params["objective"]>(p.objective);
   const [showSettings, setShowSettings] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  function calcAutoPoints(purchasedStr: string): number | null {
+    const qty = parseInt(purchasedStr, 10);
+    const up = parseInt(unitPrice, 10);
+    const tr = parseInt(taxRate, 10);
+    const pr = parseInt(pointRate, 10);
+    if (!Number.isFinite(qty) || qty < 0) return null;
+    if (!Number.isFinite(up) || up < 0) return null;
+    if (!Number.isFinite(tr) || !Number.isFinite(pr)) return null;
+    return Math.floor((qty * up / (1 + tr / 100)) * (pr / 100));
+  }
+
+  function handlePurchasedChange(v: string) {
+    setPurchased(v);
+    const auto = calcAutoPoints(v);
+    if (auto !== null) {
+      setPoints(String(auto));
+      setPointsAutoFilled(true);
+    }
+  }
+
+  function handlePointsChange(v: string) {
+    setPoints(v);
+    setPointsAutoFilled(false);
+  }
+
+  function resetPointsToAuto() {
+    const auto = calcAutoPoints(purchased);
+    if (auto !== null) {
+      setPoints(String(auto));
+      setPointsAutoFilled(true);
+    }
+  }
 
   const totalAfter = useMemo(() => {
     const p0 = parseInt(purchased, 10);
@@ -86,19 +120,35 @@ export default function InputForm({
         <FieldNumber
           label="購入済み枚数"
           value={purchased}
-          onChange={setPurchased}
+          onChange={handlePurchasedChange}
           error={errors.purchased}
           suffix="枚"
           min={0}
         />
-        <FieldNumber
-          label="所持ポイント"
-          value={points}
-          onChange={setPoints}
-          error={errors.points}
-          suffix="pt"
-          min={0}
-        />
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="block text-xs font-medium text-gray-500">所持ポイント</label>
+            {pointsAutoFilled ? (
+              <span className="text-xs text-blue-500 font-medium">自動計算</span>
+            ) : (
+              <button
+                type="button"
+                onClick={resetPointsToAuto}
+                className="text-xs text-gray-400 hover:text-blue-500 transition-colors"
+              >
+                自動計算に戻す
+              </button>
+            )}
+          </div>
+          <FieldNumber
+            label=""
+            value={points}
+            onChange={handlePointsChange}
+            error={errors.points}
+            suffix="pt"
+            min={0}
+          />
+        </div>
         <FieldNumber
           label="追加購入したい枚数"
           value={additional}
@@ -184,7 +234,7 @@ function FieldNumber({
 }) {
   return (
     <div>
-      <label className="block text-xs font-medium text-gray-500 mb-1.5">{label}</label>
+      {label && <label className="block text-xs font-medium text-gray-500 mb-1.5">{label}</label>}
       <div className="relative">
         <input
           type="number"
