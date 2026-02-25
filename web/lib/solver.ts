@@ -318,7 +318,7 @@ export function solve(n: number, params: Params, startPoints = 0): SolveResult |
   // 定数 550_000 = 60_000_000 / 110（110 = q候補数~22 × cash候補数~5）
   // ---------------------------------------------------------------------------
   const Q = n <= 70 ? 1 : Math.max(1, Math.ceil(n * n * P / 550_000));
-  const startPQ = Q > 1 ? Math.round(startP / Q) * Q : startP;
+  const startPQ = Q > 1 ? Math.floor(startP / Q) * Q : startP;
 
   // 数値キーエンコード: key = p (各 layer で独立管理)
   // layer[i] : p → { cost, parent }
@@ -367,7 +367,7 @@ export function solve(n: number, params: Params, startPoints = 0): SolveResult |
           let p2 = p - used + earned;
           // 中間ステップのみ量子化＋キャップ。最終ステップは実際の値を保持。
           if (!isFinalStep) {
-            if (Q > 1) p2 = Math.round(p2 / Q) * Q;
+            if (Q > 1) p2 = Math.floor(p2 / Q) * Q;
             if (p2 > remainingTotal) p2 = remainingTotal;
           }
 
