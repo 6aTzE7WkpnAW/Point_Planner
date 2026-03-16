@@ -6,23 +6,27 @@ interface Props {
 
 export default function Summary({ result }: Props) {
   const { summary } = result;
-  const discountRate =
+  const effectiveDiscountRate =
     summary.grossTotal > 0
       ? ((summary.grossTotal - summary.cashTotal) / summary.grossTotal) * 100
       : 0;
 
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
       <StatCard
-        label="現金支払い合計"
+        label="現金支払総額"
         value={`¥ ${summary.cashTotal.toLocaleString()}`}
-        sub={`節約 ¥${(summary.grossTotal - summary.cashTotal).toLocaleString()}`}
+        sub={`定価 ¥${summary.grossTotal.toLocaleString()}`}
         accent="bg-blue-600"
       />
       <StatCard
+        label="クーポン値引き"
+        value={`¥ ${summary.couponDiscountTotal.toLocaleString()}`}
+        accent="bg-rose-500"
+      />
+      <StatCard
         label="実質割引率"
-        value={`${discountRate.toFixed(1)} %`}
-        sub={`総額 ¥${summary.grossTotal.toLocaleString()}`}
+        value={`${effectiveDiscountRate.toFixed(1)} %`}
         accent="bg-emerald-500"
       />
       <StatCard
@@ -31,8 +35,8 @@ export default function Summary({ result }: Props) {
         accent="bg-violet-500"
       />
       <StatCard
-        label="最終ポイント残"
-        value={`${summary.leftoverPoints.toLocaleString()} pt`}
+        label="最終SC残高"
+        value={`${summary.leftoverPoints.toLocaleString()} 円`}
         accent="bg-amber-400"
       />
     </div>
@@ -51,12 +55,12 @@ function StatCard({
   accent: string;
 }) {
   return (
-    <div className="bg-white rounded-xl border border-gray-100 overflow-hidden shadow-sm">
+    <div className="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
       <div className={`h-1 ${accent}`} />
       <div className="p-4">
-        <p className="text-xs font-medium text-gray-500 mb-2">{label}</p>
-        <p className="text-xl font-bold text-gray-900 leading-none tabular-nums">{value}</p>
-        {sub && <p className="text-xs text-gray-400 mt-1.5">{sub}</p>}
+        <p className="mb-2 text-xs font-medium text-gray-500">{label}</p>
+        <p className="tabular-nums text-xl font-bold leading-none text-gray-900">{value}</p>
+        {sub && <p className="mt-1.5 text-xs text-gray-400">{sub}</p>}
       </div>
     </div>
   );

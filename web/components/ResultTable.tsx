@@ -5,58 +5,72 @@ interface Props {
 }
 
 export default function ResultTable({ orders }: Props) {
+  const totalCouponDiscount = orders.reduce((sum, row) => sum + row.couponDiscount, 0);
+  const totalPointsUsed = orders.reduce((sum, row) => sum + row.pointsUsed, 0);
+  const totalCashPaid = orders.reduce((sum, row) => sum + row.cashPaid, 0);
+  const totalPointsEarned = orders.reduce((sum, row) => sum + row.pointsEarned, 0);
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
-          <tr className="text-xs font-medium text-gray-500 text-right border-b border-gray-100">
-            <th className="px-4 py-3 text-center w-10">#</th>
-            <th className="px-4 py-3">購入枚数</th>
+          <tr className="border-b border-gray-100 text-right text-xs font-medium text-gray-500">
+            <th className="w-10 px-4 py-3 text-center">#</th>
+            <th className="px-4 py-3">枚数</th>
             <th className="px-4 py-3">注文金額</th>
-            <th className="px-4 py-3">使用ポイント</th>
+            <th className="px-4 py-3">クーポン</th>
+            <th className="px-4 py-3">使用SC</th>
             <th className="px-4 py-3">支払現金</th>
-            <th className="px-4 py-3">獲得ポイント</th>
-            <th className="px-4 py-3">残ポイント</th>
+            <th className="px-4 py-3">獲得SC</th>
+            <th className="px-4 py-3">残SC</th>
             <th className="px-4 py-3 text-center">備考</th>
           </tr>
         </thead>
         <tbody>
-          {orders.map((row, i) => (
+          {orders.map((row, index) => (
             <tr
               key={row.index}
-              className={`text-right border-b border-gray-50 hover:bg-blue-50/40 transition-colors ${
-                i % 2 === 1 ? "bg-gray-50/60" : "bg-white"
+              className={`border-b border-gray-50 text-right transition-colors hover:bg-blue-50/40 ${
+                index % 2 === 1 ? "bg-gray-50/60" : "bg-white"
               }`}
             >
               <td className="px-4 py-3 text-center">
-                <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-gray-100 text-xs font-medium text-gray-500">
+                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-gray-100 text-xs font-medium text-gray-500">
                   {row.index}
                 </span>
               </td>
-              <td className="px-4 py-3 font-semibold text-gray-900 tabular-nums">{row.qty}</td>
-              <td className="px-4 py-3 text-gray-700 tabular-nums">{row.orderTotal.toLocaleString()} 円</td>
+              <td className="px-4 py-3 tabular-nums font-semibold text-gray-900">{row.qty}</td>
+              <td className="px-4 py-3 tabular-nums text-gray-700">{row.orderTotal.toLocaleString()} 円</td>
+              <td className="px-4 py-3 tabular-nums">
+                {row.couponDiscount > 0 ? (
+                  <div className="text-right">
+                    <span className="font-medium text-rose-600">-{row.couponDiscount.toLocaleString()} 円</span>
+                    {row.couponApplied && <div className="text-[11px] text-gray-400">{row.couponApplied}</div>}
+                  </div>
+                ) : (
+                  <span className="text-gray-300">-</span>
+                )}
+              </td>
               <td className="px-4 py-3 tabular-nums">
                 {row.pointsUsed > 0 ? (
-                  <span className="text-amber-600 font-medium">−{row.pointsUsed.toLocaleString()} pt</span>
+                  <span className="font-medium text-amber-600">-{row.pointsUsed.toLocaleString()} 円</span>
                 ) : (
-                  <span className="text-gray-300">—</span>
+                  <span className="text-gray-300">-</span>
                 )}
               </td>
-              <td className="px-4 py-3 font-semibold text-blue-600 tabular-nums">
-                {row.cashPaid.toLocaleString()} 円
-              </td>
+              <td className="px-4 py-3 tabular-nums font-semibold text-blue-600">{row.cashPaid.toLocaleString()} 円</td>
               <td className="px-4 py-3 tabular-nums">
                 {row.pointsEarned > 0 ? (
-                  <span className="text-emerald-600 font-medium">+{row.pointsEarned.toLocaleString()} pt</span>
+                  <span className="font-medium text-emerald-600">+{row.pointsEarned.toLocaleString()} 円</span>
                 ) : (
-                  <span className="text-gray-400">0 pt</span>
+                  <span className="text-gray-400">0 円</span>
                 )}
               </td>
-              <td className="px-4 py-3 text-gray-700 tabular-nums">{row.pointsBalance.toLocaleString()} pt</td>
+              <td className="px-4 py-3 tabular-nums text-gray-700">{row.pointsBalance.toLocaleString()} 円</td>
               <td className="px-4 py-3 text-center">
                 {!row.eligible && (
-                  <span className="inline-block text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 whitespace-nowrap">
-                    ポイント対象外
+                  <span className="inline-block whitespace-nowrap rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500">
+                    SC付与なし
                   </span>
                 )}
               </td>
@@ -64,21 +78,16 @@ export default function ResultTable({ orders }: Props) {
           ))}
         </tbody>
         <tfoot>
-          <tr className="text-right bg-gray-50 border-t-2 border-gray-200 font-semibold text-gray-800">
-            <td className="px-4 py-3 text-center text-xs text-gray-500 font-medium">合計</td>
-            <td className="px-4 py-3 tabular-nums">{orders.reduce((s, r) => s + r.qty, 0)}</td>
-            <td className="px-4 py-3 tabular-nums">{orders.reduce((s, r) => s + r.orderTotal, 0).toLocaleString()} 円</td>
-            <td className="px-4 py-3 text-amber-600 tabular-nums">
-              −{orders.reduce((s, r) => s + r.pointsUsed, 0).toLocaleString()} pt
-            </td>
-            <td className="px-4 py-3 text-blue-600 tabular-nums">
-              {orders.reduce((s, r) => s + r.cashPaid, 0).toLocaleString()} 円
-            </td>
-            <td className="px-4 py-3 text-emerald-600 tabular-nums">
-              +{orders.reduce((s, r) => s + r.pointsEarned, 0).toLocaleString()} pt
-            </td>
-            <td className="px-4 py-3 text-gray-700 tabular-nums" colSpan={2}>
-              {orders[orders.length - 1]?.pointsBalance.toLocaleString()} pt
+          <tr className="border-t-2 border-gray-200 bg-gray-50 text-right font-semibold text-gray-800">
+            <td className="px-4 py-3 text-center text-xs font-medium text-gray-500">合計</td>
+            <td className="px-4 py-3 tabular-nums">{orders.reduce((sum, row) => sum + row.qty, 0)}</td>
+            <td className="px-4 py-3 tabular-nums">{orders.reduce((sum, row) => sum + row.orderTotal, 0).toLocaleString()} 円</td>
+            <td className="px-4 py-3 tabular-nums text-rose-600">-{totalCouponDiscount.toLocaleString()} 円</td>
+            <td className="px-4 py-3 tabular-nums text-amber-600">-{totalPointsUsed.toLocaleString()} 円</td>
+            <td className="px-4 py-3 tabular-nums text-blue-600">{totalCashPaid.toLocaleString()} 円</td>
+            <td className="px-4 py-3 tabular-nums text-emerald-600">+{totalPointsEarned.toLocaleString()} 円</td>
+            <td className="px-4 py-3 tabular-nums text-gray-700" colSpan={2}>
+              {orders[orders.length - 1]?.pointsBalance.toLocaleString()} 円
             </td>
           </tr>
         </tfoot>
