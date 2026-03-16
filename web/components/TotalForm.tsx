@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import CouponEditor from "@/components/CouponEditor";
+import { draftsFromCoupons, validateCouponDrafts } from "@/lib/coupon-form";
 import type { Params } from "@/types";
 import { DEFAULT_PARAMS } from "@/types";
 
@@ -17,36 +19,51 @@ export default function TotalForm({
   initialTotal = 60,
   initialParams,
 }: Props) {
-  const p = initialParams ?? DEFAULT_PARAMS;
+  const initial = initialParams ?? DEFAULT_PARAMS;
 
   const [total, setTotal] = useState(String(initialTotal));
-  const [unitPrice, setUnitPrice] = useState(String(p.unitPriceTaxIn));
-  const [taxRate, setTaxRate] = useState(String(Math.round(p.taxRate * 100)));
-  const [pointRate, setPointRate] = useState(String(Math.round(p.pointRate * 100)));
-  const [minEligible, setMinEligible] = useState(String(p.minEligibleTotal));
-  const [objective, setObjective] = useState<Params["objective"]>(p.objective);
+  const [unitPrice, setUnitPrice] = useState(String(initial.unitPriceTaxIn));
+  const [taxRate, setTaxRate] = useState(String(Math.round(initial.taxRate * 100)));
+  const [pointRate, setPointRate] = useState(String(Math.round(initial.pointRate * 100)));
+  const [minEligible, setMinEligible] = useState(String(initial.minEligibleTotal));
+  const [objective, setObjective] = useState<Params["objective"]>(initial.objective);
+  const [couponDrafts, setCouponDrafts] = useState(() => draftsFromCoupons(initial.coupons));
   const [showSettings, setShowSettings] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  function validate(): boolean {
-    const errs: Record<string, string> = {};
-    const totalInt = parseInt(total, 10);
-    if (!Number.isInteger(totalInt) || totalInt < 1) errs.total = "1以上の整数を入力してください";
-    const up = parseInt(unitPrice, 10);
-    if (!Number.isInteger(up) || up < 0) errs.unitPrice = "0以上の整数を入力してください";
-    const tr = parseInt(taxRate, 10);
-    if (isNaN(tr) || tr < 0 || tr > 100) errs.taxRate = "0〜100の整数を入力してください";
-    const pr = parseInt(pointRate, 10);
-    if (isNaN(pr) || pr < 0 || pr > 100) errs.pointRate = "0〜100の整数を入力してください";
-    const me = parseInt(minEligible, 10);
-    if (!Number.isInteger(me) || me < 0) errs.minEligible = "0以上の整数を入力してください";
-    setErrors(errs);
-    return Object.keys(errs).length === 0;
+  function validate() {
+    const nextErrors: Record<string, string> = {};
+    const totalCount = parseInt(total, 10);
+    const price = parseInt(unitPrice, 10);
+    const tax = parseInt(taxRate, 10);
+    const rate = parseInt(pointRate, 10);
+    const minimum = parseInt(minEligible, 10);
+
+    if (!Number.isInteger(totalCount) || totalCount < 1) nextErrors.total = "1以上の整数で入力してください。";
+    if (!Number.isInteger(price) || price < 0) nextErrors.unitPrice = "0以上の整数で入力してください。";
+    if (!Number.isInteger(tax) || tax < 0 || tax > 100) nextErrors.taxRate = "0から100の整数で入力してください。";
+    if (!Number.isInteger(rate) || rate < 0 || rate > 100) nextErrors.pointRate = "0から100の整数で入力してください。";
+    if (!Number.isInteger(minimum) || minimum < 0) nextErrors.minEligible = "0以上の整数で入力してください。";
+
+    const validatedCoupons = validateCouponDrafts(couponDrafts);
+    if (validatedCoupons.error) {
+      nextErrors.coupons = validatedCoupons.error;
+    }
+
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) {
+      return null;
+    }
+    return validatedCoupons.coupons;
   }
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!validate()) return;
+  function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    const coupons = validate();
+    if (coupons === null) {
+      return;
+    }
+
     onSubmit(parseInt(total, 10), {
       unitPriceTaxIn: parseInt(unitPrice, 10),
       taxRate: parseInt(taxRate, 10) / 100,
@@ -55,76 +72,64 @@ export default function TotalForm({
       eligibleBasis: "order_total",
       taxExMethod: "taxex_floor_then_rate",
       objective,
+      coupons,
     });
   }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
       <div>
-        <label className="block text-xs font-medium text-gray-500 mb-1.5">
-          購入したい合計枚数
-        </label>
-        <div className="flex gap-3 items-start">
+        <label className="mb-1.5 block text-xs font-medium text-gray-500">購入したい総枚数</label>
+        <div className="flex items-start gap-3">
           <div className="flex-1">
             <div className="relative">
               <input
                 type="number"
                 value={total}
-                onChange={(e) => setTotal(e.target.value)}
+                onChange={(event) => setTotal(event.target.value)}
                 min={1}
-                className={`w-full bg-white border rounded-lg px-3 py-2.5 pr-10 text-right text-gray-900 font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow ${
+                className={`w-full rounded-lg border bg-white px-3 py-2.5 pr-10 text-right text-sm font-semibold text-gray-900 transition-shadow focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500 ${
                   errors.total ? "border-red-400" : "border-gray-200"
                 }`}
-                placeholder="例: 60"
               />
-              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">
-                枚
-              </span>
+              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">枚</span>
             </div>
-            {errors.total && <p className="text-red-500 text-xs mt-1">{errors.total}</p>}
+            {errors.total && <p className="mt-1 text-xs text-red-500">{errors.total}</p>}
           </div>
           <button
             type="submit"
             disabled={loading}
-            className="px-6 py-2.5 bg-blue-600 text-white text-sm rounded-xl font-semibold hover:bg-blue-700 disabled:opacity-50 transition-colors shadow-sm whitespace-nowrap"
+            className="whitespace-nowrap rounded-xl bg-blue-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:opacity-50"
           >
-            {loading ? "計算中…" : "最適プランを計算"}
+            {loading ? "計算中..." : "最適プランを計算"}
           </button>
         </div>
       </div>
 
-      <button
-        type="button"
-        onClick={() => setShowSettings(!showSettings)}
-        className="text-sm text-gray-400 hover:text-gray-600 transition-colors"
-      >
-        {showSettings ? "設定を閉じる" : "詳細設定"}
+      <button type="button" onClick={() => setShowSettings((value) => !value)} className="text-sm text-gray-400 transition-colors hover:text-gray-600">
+        {showSettings ? "詳細設定を閉じる" : "詳細設定"}
       </button>
 
       {showSettings && (
-        <div className="p-4 bg-slate-50 rounded-xl border border-gray-200 space-y-4">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">詳細設定</p>
+        <div className="space-y-4 rounded-xl border border-gray-200 bg-slate-50 p-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">詳細設定</p>
           <div className="grid grid-cols-2 gap-4">
-            <FieldNumber label="1枚の税込価格" value={unitPrice} onChange={setUnitPrice} error={errors.unitPrice} suffix="円" min={0} />
+            <FieldNumber label="税込単価" value={unitPrice} onChange={setUnitPrice} error={errors.unitPrice} suffix="円" min={0} />
             <FieldNumber label="税率" value={taxRate} onChange={setTaxRate} error={errors.taxRate} suffix="%" min={0} max={100} />
-            <FieldNumber label="ポイント付与率" value={pointRate} onChange={setPointRate} error={errors.pointRate} suffix="%" min={0} max={100} />
-            <FieldNumber label="付与下限金額" value={minEligible} onChange={setMinEligible} error={errors.minEligible} suffix="円" min={0} />
+            <FieldNumber label="スペシャルクーポン還元率" value={pointRate} onChange={setPointRate} error={errors.pointRate} suffix="%" min={0} max={100} />
+            <FieldNumber label="付与対象最低金額" value={minEligible} onChange={setMinEligible} error={errors.minEligible} suffix="円" min={0} />
           </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="text-xs text-gray-500 bg-white border border-gray-200 rounded-lg p-3 space-y-0.5">
-              <p className="font-semibold text-gray-600 mb-1">HMVルール（固定）</p>
-              <p>条件: 注文金額（税込、ポイント使用前）≥ 10,000円</p>
-              <p>付与: 税抜（ポイント利用後）× 20%（切捨て）</p>
-            </div>
             <FieldSelect
-              label="目的の優先順位"
+              label="最適化目標"
               value={objective}
-              onChange={(v) => setObjective(v as Params["objective"])}
+              onChange={(value) => setObjective(value as Params["objective"])}
               options={[
                 { value: "min_cash_then_min_orders", label: "現金最小 → 注文回数最小" },
-                { value: "min_cash_then_min_leftover", label: "現金最小 → 残ポイント最小" },
+                { value: "min_cash_then_min_leftover", label: "現金最小 → 残SC最小" },
               ]}
             />
+            <CouponEditor coupons={couponDrafts} onChange={setCouponDrafts} error={errors.coupons} />
           </div>
         </div>
       )}
@@ -143,7 +148,7 @@ function FieldNumber({
 }: {
   label: string;
   value: string;
-  onChange: (v: string) => void;
+  onChange: (value: string) => void;
   error?: string;
   suffix?: string;
   min?: number;
@@ -151,25 +156,21 @@ function FieldNumber({
 }) {
   return (
     <div>
-      <label className="block text-xs font-medium text-gray-500 mb-1.5">{label}</label>
+      <label className="mb-1.5 block text-xs font-medium text-gray-500">{label}</label>
       <div className="relative">
         <input
           type="number"
           value={value}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(event) => onChange(event.target.value)}
           min={min}
           max={max}
-          className={`w-full bg-white border rounded-lg px-3 py-2.5 text-right text-gray-900 font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow ${
+          className={`w-full rounded-lg border bg-white px-3 py-2.5 text-right text-sm font-semibold text-gray-900 transition-shadow focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500 ${
             suffix ? "pr-10" : ""
           } ${error ? "border-red-400" : "border-gray-200"}`}
         />
-        {suffix && (
-          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">
-            {suffix}
-          </span>
-        )}
+        {suffix && <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">{suffix}</span>}
       </div>
-      {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
+      {error && <p className="mt-1 text-xs text-red-500">{error}</p>}
     </div>
   );
 }
@@ -182,20 +183,20 @@ function FieldSelect({
 }: {
   label: string;
   value: string;
-  onChange: (v: string) => void;
+  onChange: (value: string) => void;
   options: { value: string; label: string }[];
 }) {
   return (
     <div>
-      <label className="block text-xs font-medium text-gray-500 mb-1.5">{label}</label>
+      <label className="mb-1.5 block text-xs font-medium text-gray-500">{label}</label>
       <select
         value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2.5 text-sm text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow"
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-900 transition-shadow focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
       >
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
           </option>
         ))}
       </select>

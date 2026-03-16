@@ -1,21 +1,49 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useCallback, useState } from "react";
+import BudgetForm from "@/components/BudgetForm";
 import InputForm from "@/components/InputForm";
-import TotalForm from "@/components/TotalForm";
-import Summary from "@/components/Summary";
 import ResultTable from "@/components/ResultTable";
-import type { Params, SolveResult } from "@/types";
+import Summary from "@/components/Summary";
+import TotalForm from "@/components/TotalForm";
 import { DEFAULT_PARAMS } from "@/types";
+import type { Coupon, Params, SolveResult, SolveReverseResult } from "@/types";
 
 type State = "idle" | "loading" | "result" | "error";
 
-function encodeParams(
-  additional: number,
-  purchased: number,
-  points: number,
-  params: Params
-): string {
+function serializeCoupons(coupons?: Coupon[]): string {
+  return (coupons ?? [])
+    .map((coupon) => `${coupon.minTotal}-${coupon.discount}-${coupon.count}`)
+    .join(";");
+}
+
+function deserializeCoupons(value: string | null): Coupon[] {
+  if (!value) {
+    return [];
+  }
+  return value
+    .split(";")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => {
+      const [minTotal, discount, count] = item.split("-");
+      return {
+        minTotal: parseInt(minTotal, 10),
+        discount: parseInt(discount, 10),
+        count: parseInt(count ?? "1", 10),
+      };
+    })
+    .filter((coupon) =>
+      Number.isInteger(coupon.minTotal) &&
+      coupon.minTotal >= 0 &&
+      Number.isInteger(coupon.discount) &&
+      coupon.discount >= 0 &&
+      Number.isInteger(coupon.count) &&
+      coupon.count > 0
+    );
+}
+
+function encodeParams(additional: number, purchased: number, points: number, params: Params): string {
   const obj = {
     add: additional,
     cp: purchased,
@@ -25,10 +53,9 @@ function encodeParams(
     pr: Math.round(params.pointRate * 100),
     me: params.minEligibleTotal,
     ob: params.objective,
+    cu: serializeCoupons(params.coupons),
   };
-  return new URLSearchParams(
-    Object.entries(obj).map(([k, v]) => [k, String(v)])
-  ).toString();
+  return new URLSearchParams(Object.entries(obj).map(([key, value]) => [key, String(value)])).toString();
 }
 
 function decodeParams(search: string): {
@@ -38,23 +65,28 @@ function decodeParams(search: string): {
   params: Params;
 } | null {
   try {
-    const p = new URLSearchParams(search);
-    const add = parseInt(p.get("add") ?? p.get("n") ?? "", 10);
-    const cp = parseInt(p.get("cp") ?? "0", 10);
-    const sp = parseInt(p.get("sp") ?? "0", 10);
-    if (!add || add < 1) return null;
+    const query = new URLSearchParams(search);
+    const additional = parseInt(query.get("add") ?? query.get("n") ?? "", 10);
+    const purchased = parseInt(query.get("cp") ?? "0", 10);
+    const points = parseInt(query.get("sp") ?? "0", 10);
+
+    if (!additional || additional < 1) {
+      return null;
+    }
+
     return {
-      additional: add,
-      purchased: Number.isFinite(cp) ? cp : 0,
-      points: Number.isFinite(sp) ? sp : 0,
+      additional,
+      purchased: Number.isFinite(purchased) ? purchased : 0,
+      points: Number.isFinite(points) ? points : 0,
       params: {
-        unitPriceTaxIn: parseInt(p.get("up") ?? "1800", 10),
-        taxRate: parseInt(p.get("tr") ?? "10", 10) / 100,
-        pointRate: parseInt(p.get("pr") ?? "20", 10) / 100,
-        minEligibleTotal: parseInt(p.get("me") ?? "10000", 10),
+        unitPriceTaxIn: parseInt(query.get("up") ?? "1800", 10),
+        taxRate: parseInt(query.get("tr") ?? "10", 10) / 100,
+        pointRate: parseInt(query.get("pr") ?? "20", 10) / 100,
+        minEligibleTotal: parseInt(query.get("me") ?? "10000", 10),
         eligibleBasis: "order_total",
         taxExMethod: "taxex_floor_then_rate",
-        objective: (p.get("ob") as Params["objective"]) ?? "min_cash_then_min_orders",
+        objective: (query.get("ob") as Params["objective"]) ?? "min_cash_then_min_orders",
+        coupons: deserializeCoupons(query.get("cu")),
       },
     };
   } catch {
@@ -63,57 +95,60 @@ function decodeParams(search: string): {
 }
 
 export default function Home() {
-  const [tab, setTab] = useState<"total" | "additional">("total");
+  const [tab, setTab] = useState<"total" | "additional" | "budget">("total");
   const [state, setState] = useState<State>("idle");
   const [result, setResult] = useState<SolveResult | null>(null);
+  const [resultN, setResultN] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
   const [shareUrl, setShareUrl] = useState("");
+  const [copied, setCopied] = useState(false);
+
   const [initialAdditional] = useState(() => {
     if (typeof window === "undefined") return 1;
-    const decoded = decodeParams(window.location.search);
-    return decoded?.additional ?? 1;
+    return decodeParams(window.location.search)?.additional ?? 1;
   });
   const [initialPurchased] = useState(() => {
     if (typeof window === "undefined") return 0;
-    const decoded = decodeParams(window.location.search);
-    return decoded?.purchased ?? 0;
+    return decodeParams(window.location.search)?.purchased ?? 0;
   });
   const [initialPoints] = useState(() => {
     if (typeof window === "undefined") return 0;
-    const decoded = decodeParams(window.location.search);
-    return decoded?.points ?? 0;
+    return decodeParams(window.location.search)?.points ?? 0;
   });
   const [initialParams] = useState<Params>(() => {
     if (typeof window === "undefined") return DEFAULT_PARAMS;
-    const decoded = decodeParams(window.location.search);
-    return decoded?.params ?? DEFAULT_PARAMS;
+    return decodeParams(window.location.search)?.params ?? DEFAULT_PARAMS;
   });
-  const [copied, setCopied] = useState(false);
 
   const handleAdditionalSubmit = useCallback(
     async (additional: number, params: Params, startPoints: number, purchased: number) => {
       setState("loading");
       setResult(null);
+      setResultN(null);
       setShareUrl("");
+
       try {
-        const res = await fetch("/api/solve", {
+        const response = await fetch("/api/solve", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ n: additional, params, startPoints }),
         });
-        const data = await res.json();
-        if (!res.ok) {
-          setErrorMsg(data.error ?? "エラーが発生しました");
+        const data = await response.json();
+        if (!response.ok) {
+          setErrorMsg(data.error ?? "エラーが発生しました。");
           setState("error");
           return;
         }
+
         setResult(data as SolveResult);
         setState("result");
-        const url = `${window.location.origin}${window.location.pathname}?${encodeParams(additional, purchased, startPoints, params)}`;
+
+        const encoded = encodeParams(additional, purchased, startPoints, params);
+        const url = `${window.location.origin}${window.location.pathname}?${encoded}`;
         setShareUrl(url);
-        window.history.replaceState(null, "", `?${encodeParams(additional, purchased, startPoints, params)}`);
+        window.history.replaceState(null, "", `?${encoded}`);
       } catch {
-        setErrorMsg("通信エラーが発生しました");
+        setErrorMsg("通信エラーが発生しました。");
         setState("error");
       }
     },
@@ -123,26 +158,60 @@ export default function Home() {
   const handleTotalSubmit = useCallback(async (total: number, params: Params) => {
     setState("loading");
     setResult(null);
+    setResultN(null);
     setShareUrl("");
+
     try {
-      const res = await fetch("/api/solve", {
+      const response = await fetch("/api/solve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ n: total, params, startPoints: 0 }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setErrorMsg(data.error ?? "エラーが発生しました");
+      const data = await response.json();
+      if (!response.ok) {
+        setErrorMsg(data.error ?? "エラーが発生しました。");
         setState("error");
         return;
       }
+
       setResult(data as SolveResult);
       setState("result");
-      const url = `${window.location.origin}${window.location.pathname}?${encodeParams(total, 0, 0, params)}`;
+
+      const encoded = encodeParams(total, 0, 0, params);
+      const url = `${window.location.origin}${window.location.pathname}?${encoded}`;
       setShareUrl(url);
-      window.history.replaceState(null, "", `?${encodeParams(total, 0, 0, params)}`);
+      window.history.replaceState(null, "", `?${encoded}`);
     } catch {
-      setErrorMsg("通信エラーが発生しました");
+      setErrorMsg("通信エラーが発生しました。");
+      setState("error");
+    }
+  }, []);
+
+  const handleBudgetSubmit = useCallback(async (budget: number, startPoints: number, params: Params) => {
+    setState("loading");
+    setResult(null);
+    setResultN(null);
+    setShareUrl("");
+
+    try {
+      const response = await fetch("/api/solve-reverse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ budget, params, startPoints }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setErrorMsg(data.error ?? "エラーが発生しました。");
+        setState("error");
+        return;
+      }
+
+      const reverseResult = data as SolveReverseResult;
+      setResult(reverseResult);
+      setResultN(reverseResult.n);
+      setState("result");
+    } catch {
+      setErrorMsg("通信エラーが発生しました。");
       setState("error");
     }
   }, []);
@@ -155,32 +224,27 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 h-14 flex items-center">
-          <h1 className="text-base font-bold text-gray-900 tracking-tight">
-            ポイント分割購入プランナー
-          </h1>
+      <header className="border-b border-gray-200 bg-white">
+        <div className="mx-auto flex h-14 max-w-4xl items-center px-4 sm:px-6">
+          <h1 className="text-base font-bold tracking-tight text-gray-900">ポイント分割購入プランナー</h1>
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-4 sm:px-6 py-6 space-y-5">
-        {/* Form card */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          {/* Tabs */}
+      <main className="mx-auto max-w-4xl space-y-5 px-4 py-6 sm:px-6">
+        <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
           <div className="flex border-b border-gray-100 bg-gray-50/60">
-            {(["total", "additional"] as const).map((t) => (
+            {(["total", "additional", "budget"] as const).map((value) => (
               <button
-                key={t}
+                key={value}
                 type="button"
-                onClick={() => setTab(t)}
-                className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
-                  tab === t
-                    ? "border-blue-600 text-blue-600 bg-white"
-                    : "border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                onClick={() => setTab(value)}
+                className={`border-b-2 px-5 py-3 text-sm font-medium transition-colors ${
+                  tab === value
+                    ? "border-blue-600 bg-white text-blue-600"
+                    : "border-transparent text-gray-500 hover:bg-gray-50 hover:text-gray-700"
                 }`}
               >
-                {t === "total" ? "合計枚数から計算" : "追加購入"}
+                {value === "total" ? "総枚数から計算" : value === "additional" ? "追加購入を試算" : "予算から逆算"}
               </button>
             ))}
           </div>
@@ -195,65 +259,67 @@ export default function Home() {
                 initialPoints={initialPoints}
                 initialParams={initialParams}
               />
+            ) : tab === "budget" ? (
+              <BudgetForm onSubmit={handleBudgetSubmit} loading={state === "loading"} initialParams={initialParams} />
             ) : (
-              <TotalForm
-                onSubmit={handleTotalSubmit}
-                loading={state === "loading"}
-                initialTotal={initialAdditional}
-                initialParams={initialParams}
-              />
+              <TotalForm onSubmit={handleTotalSubmit} loading={state === "loading"} initialTotal={initialAdditional} initialParams={initialParams} />
             )}
           </div>
         </div>
 
-        {/* Loading */}
         {state === "loading" && (
           <div className="flex flex-col items-center gap-3 py-14">
-            <div className="w-8 h-8 border-[3px] border-blue-500 border-t-transparent rounded-full animate-spin" />
-            <p className="text-sm text-gray-400">最適なプランを計算しています…</p>
+            <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-blue-500 border-t-transparent" />
+            <p className="text-sm text-gray-400">最適なプランを計算しています...</p>
           </div>
         )}
 
-        {/* Error */}
         {state === "error" && (
-          <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl p-4">
-            <span className="text-red-500 mt-0.5 shrink-0">✕</span>
+          <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
+            <span className="mt-0.5 shrink-0 text-red-500">!</span>
             <div>
               <p className="text-sm font-medium text-red-800">エラーが発生しました</p>
-              <p className="text-xs text-red-600 mt-0.5">{errorMsg}</p>
+              <p className="mt-0.5 text-xs text-red-600">{errorMsg}</p>
             </div>
           </div>
         )}
 
-        {/* Result */}
         {state === "result" && result && (
           <div className="space-y-4">
+            {resultN !== null && (
+              <div className="rounded-xl border border-blue-200 bg-blue-50 px-5 py-4">
+                <p className="text-sm text-blue-700">
+                  この予算で購入できる最大枚数:
+                  <span className="ml-2 text-lg font-bold text-blue-900">{resultN} 枚</span>
+                </p>
+              </div>
+            )}
+
             <Summary result={result} />
 
-<div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-              <div className="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-gray-800">注文内訳</h2>
-                <span className="text-xs text-gray-400 tabular-nums">
-                  {result.meta.timeMs} ms{!result.meta.exact && " · 近似解"}
+            <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
+              <div className="flex items-center justify-between border-b border-gray-100 px-5 py-3.5">
+                <h2 className="text-sm font-semibold text-gray-800">購入プラン詳細</h2>
+                <span className="tabular-nums text-xs text-gray-400">
+                  {result.meta.timeMs} ms{!result.meta.exact && " / 近似"}
                 </span>
               </div>
               <ResultTable orders={result.orders} />
             </div>
 
-            <div className="space-y-1 px-1">
-              <p className="text-xs text-gray-400">・この結果は、丸めと判定基準の設定に依存します。</p>
-              <p className="text-xs text-gray-400">・ポイントは同一注文内では増えず、次回以降に使える前提です。</p>
+            <div className="space-y-1 px-1 text-xs text-gray-400">
+              <p>通常クーポンは税込み注文金額で判定し、1注文につき1枚まで使う前提です。</p>
+              <p>HMVスペシャルクーポンと通常クーポンは同時利用不可の前提で計算しています。</p>
+              <p>スペシャルクーポン付与判定は注文金額ベース、付与額は利用後の支払額ベースで計算しています。</p>
             </div>
 
             {shareUrl && (
-              <div className="flex items-center gap-3 bg-white border border-gray-100 rounded-xl px-4 py-3">
-                <span className="text-xs text-gray-400 flex-1 truncate font-mono">{shareUrl}</span>
+              <div className="flex items-center gap-3 rounded-xl border border-gray-100 bg-white px-4 py-3">
+                <span className="flex-1 truncate font-mono text-xs text-gray-400">{shareUrl}</span>
                 <button
                   onClick={handleCopy}
-                  className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-colors shrink-0 ${
-                    copied
-                      ? "bg-green-100 text-green-700"
-                      : "bg-gray-100 hover:bg-gray-200 text-gray-600"
+                  className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                    copied ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
                   }`}
                 >
                   {copied ? "コピーしました" : "URLをコピー"}
