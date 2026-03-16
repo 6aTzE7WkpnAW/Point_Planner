@@ -1,56 +1,72 @@
-/**
- * solver.ts
- *
- * ポイント分割購入の最適化ソルバー（TypeScript実装）。
- *
- * アルゴリズム:
- *   レイヤー別 DP（層ごとに前進探索）+ Pareto frontier 枝刈り
- *   ヒープを使わず、i=0,1,...,n の順に確定的に処理する。
- */
+import type { Coupon, OrderRow, Params, SolveResult } from "@/types";
 
-import type { Params, OrderRow, SolveResult } from "@/types";
-
-// ---------------------------------------------------------------------------
-// 探索チューニング定数
-// ---------------------------------------------------------------------------
 const Q_TAIL_WINDOW = 12;
 const Q_SMALL_MAX = 12;
 const Q_THRESHOLD_NEAR = 4;
+const TIME_LIMIT_MS = 8000;
 
-// ---------------------------------------------------------------------------
-// ユーティリティ
-// ---------------------------------------------------------------------------
+type CouponAction = {
+  nextCounts: number[];
+  discount: number;
+  label: string | null;
+};
+
+type ParentInfo = {
+  prevItems: number;
+  prevPoints: number;
+  prevCouponKey: string;
+  qty: number;
+  orderTotal: number;
+  couponDiscount: number;
+  couponApplied: string | null;
+  pointsUsed: number;
+  cashPaid: number;
+};
+
+type LayerEntry = {
+  cost: number;
+  parent: ParentInfo | null;
+};
+
 function gcd(a: number, b: number): number {
-  while (b) {
+  while (b !== 0) {
     [a, b] = [b, a % b];
   }
   return a;
 }
 
-/**
- * ポイント付与比率を既約分数 (num/den) で返す。
- * earned = floor(cashPaid * num / den)  (ratio_floor モード)
- */
 function ratioNumDen(pointRate: number, taxRate: number): [number, number] {
   const scale = 1_000_000;
   const num = Math.round(pointRate * scale);
   const den = scale + Math.round(taxRate * scale);
-  const g = gcd(num, den);
-  return [num / g, den / g];
+  const div = gcd(num, den);
+  return [num / div, den / div];
 }
 
-// ---------------------------------------------------------------------------
-// 1注文の計算
-// ---------------------------------------------------------------------------
-function isEligible(
-  orderTotal: number,
-  cashPaid: number,
-  minEligibleTotal: number,
-  eligibleBasis: string
-): boolean {
-  return eligibleBasis === "order_total"
-    ? orderTotal >= minEligibleTotal
-    : cashPaid >= minEligibleTotal;
+function normalizeCoupons(coupons?: Coupon[]): Coupon[] {
+  return (coupons ?? [])
+    .map((coupon) => ({
+      minTotal: Math.max(0, Math.floor(coupon.minTotal)),
+      discount: Math.max(0, Math.floor(coupon.discount)),
+      count: Math.max(0, Math.floor(coupon.count)),
+    }))
+    .filter((coupon) => coupon.discount > 0 && coupon.count > 0)
+    .sort((a, b) => (a.minTotal - b.minTotal) || (a.discount - b.discount));
+}
+
+function couponKey(counts: number[]): string {
+  return counts.join(",");
+}
+
+function parseCouponKey(key: string): number[] {
+  if (!key) return [];
+  return key.split(",").map((value) => parseInt(value, 10));
+}
+
+function isEligible(orderTotal: number, cashPaid: number, params: Params): boolean {
+  return params.eligibleBasis === "order_total"
+    ? orderTotal >= params.minEligibleTotal
+    : cashPaid >= params.minEligibleTotal;
 }
 
 function calcPointsEarned(
@@ -60,330 +76,349 @@ function calcPointsEarned(
   num: number,
   den: number
 ): number {
-  if (!isEligible(orderTotal, cashPaid, params.minEligibleTotal, params.eligibleBasis)) {
+  if (!isEligible(orderTotal, cashPaid, params)) {
     return 0;
   }
   if (params.taxExMethod === "ratio_floor") {
     return Math.floor((cashPaid * num) / den);
   }
-  const taxEx = Math.floor(cashPaid / (1 + params.taxRate));
-  return Math.floor(taxEx * params.pointRate);
+  const taxExclusive = Math.floor(cashPaid / (1 + params.taxRate));
+  return Math.floor(taxExclusive * params.pointRate);
 }
 
-/**
- * 注文後のポイント残高（candidateCashValues 内で使用）
- */
 function endPoints(
-  p0: number,
+  startPoints: number,
   cashPaid: number,
+  payableTotal: number,
   orderTotal: number,
   params: Params,
   num: number,
   den: number
 ): number {
-  const used = orderTotal - cashPaid;
-  return p0 - used + calcPointsEarned(cashPaid, orderTotal, params, num, den);
+  const used = payableTotal - cashPaid;
+  return startPoints - used + calcPointsEarned(cashPaid, orderTotal, params, num, den);
 }
 
-// ---------------------------------------------------------------------------
-// Pareto frontier  (pts 昇順、costs 厳密増加)
-// ---------------------------------------------------------------------------
 class Frontier {
-  pts: number[] = [];
-  costs: number[] = [];
+  private points: number[] = [];
+  private costs: number[] = [];
 
-  dominated(p: number, cost: number): boolean {
-    const idx = lowerBound(this.pts, p);
-    return idx < this.pts.length && this.costs[idx] <= cost;
+  dominated(pointBalance: number, cost: number, keepLowerPointsOnTie: boolean): boolean {
+    const idx = lowerBound(this.points, pointBalance);
+    if (idx < this.points.length && this.points[idx] === pointBalance) {
+      return this.costs[idx] <= cost;
+    }
+    if (idx < this.points.length) {
+      return keepLowerPointsOnTie ? this.costs[idx] < cost : this.costs[idx] <= cost;
+    }
+    return false;
   }
 
-  insert(p: number, cost: number): boolean {
-    const idx = lowerBound(this.pts, p);
-    if (idx < this.pts.length && this.pts[idx] === p) {
-      if (this.costs[idx] <= cost) return false;
+  insert(pointBalance: number, cost: number, keepLowerPointsOnTie: boolean): boolean {
+    const idx = lowerBound(this.points, pointBalance);
+    if (idx < this.points.length && this.points[idx] === pointBalance) {
+      if (this.costs[idx] <= cost) {
+        return false;
+      }
       this.costs[idx] = cost;
     } else {
-      if (idx < this.pts.length && this.costs[idx] <= cost) return false;
-      this.pts.splice(idx, 0, p);
+      if (idx < this.points.length) {
+        const dominates = keepLowerPointsOnTie ? this.costs[idx] < cost : this.costs[idx] <= cost;
+        if (dominates) {
+          return false;
+        }
+      }
+      this.points.splice(idx, 0, pointBalance);
       this.costs.splice(idx, 0, cost);
     }
+
     let i = idx;
-    while (i > 0 && this.costs[i - 1] >= this.costs[i]) {
-      this.pts.splice(i - 1, 1);
+    while (
+      i > 0 &&
+      (keepLowerPointsOnTie ? this.costs[i - 1] > this.costs[i] : this.costs[i - 1] >= this.costs[i])
+    ) {
+      this.points.splice(i - 1, 1);
       this.costs.splice(i - 1, 1);
-      i--;
+      i -= 1;
     }
     return true;
   }
-
-  items(): Array<[number, number]> {
-    return this.pts.map((p, i) => [p, this.costs[i]]);
-  }
-
-  get size(): number {
-    return this.pts.length;
-  }
 }
 
-function lowerBound(arr: number[], target: number): number {
-  let lo = 0, hi = arr.length;
+function lowerBound(values: number[], target: number): number {
+  let lo = 0;
+  let hi = values.length;
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
-    if (arr[mid] < target) lo = mid + 1;
-    else hi = mid;
+    if (values[mid] < target) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
   }
   return lo;
 }
 
-// ---------------------------------------------------------------------------
-// 探索候補の生成
-// ---------------------------------------------------------------------------
 function qCandidates(remItems: number, params: Params): number[] {
-  const P = params.unitPriceTaxIn;
-  const qThr = Math.ceil(params.minEligibleTotal / P);
+  const thresholdQty = Math.ceil(params.minEligibleTotal / params.unitPriceTaxIn);
   const seen = new Uint8Array(remItems + 1);
   const result: number[] = [];
 
-  function add(q: number) {
-    if (q >= 1 && q <= remItems && !seen[q]) {
-      seen[q] = 1;
-      result.push(q);
+  const add = (qty: number) => {
+    if (qty >= 1 && qty <= remItems && seen[qty] === 0) {
+      seen[qty] = 1;
+      result.push(qty);
     }
-  }
+  };
 
-  for (let q = 1; q <= Math.min(remItems, Q_SMALL_MAX); q++) add(q);
-  for (let dq = -Q_THRESHOLD_NEAR; dq <= Q_THRESHOLD_NEAR; dq++) add(qThr + dq);
-  for (let k = 0; k <= Math.min(Q_TAIL_WINDOW, remItems - 1); k++) add(remItems - k);
+  for (let qty = 1; qty <= Math.min(remItems, Q_SMALL_MAX); qty += 1) {
+    add(qty);
+  }
+  for (let delta = -Q_THRESHOLD_NEAR; delta <= Q_THRESHOLD_NEAR; delta += 1) {
+    add(thresholdQty + delta);
+  }
+  for (let offset = 0; offset <= Math.min(Q_TAIL_WINDOW, remItems - 1); offset += 1) {
+    add(remItems - offset);
+  }
   add(remItems);
 
   return result.sort((a, b) => a - b);
 }
 
-/**
- * 支払現金の候補を絞り込む。
- * ratio_floor モードでは解析的推定で境界点を高速計算する。
- */
+function maxFutureCouponDiscount(
+  coupons: Coupon[],
+  counts: number[],
+  remainingItems: number,
+  unitPriceTaxIn: number
+): number {
+  if (remainingItems <= 0 || coupons.length === 0) {
+    return 0;
+  }
+
+  const remainingGross = remainingItems * unitPriceTaxIn;
+  let total = 0;
+  for (let index = 0; index < coupons.length; index += 1) {
+    if (counts[index] <= 0) {
+      continue;
+    }
+    if (coupons[index].minTotal > remainingGross) {
+      continue;
+    }
+    total += coupons[index].discount * counts[index];
+  }
+  return Math.min(total, remainingGross);
+}
+
+function couponActions(coupons: Coupon[], counts: number[], orderTotal: number): CouponAction[] {
+  const actions: CouponAction[] = [{ nextCounts: counts, discount: 0, label: null }];
+
+  for (let index = 0; index < coupons.length; index += 1) {
+    const coupon = coupons[index];
+    if (counts[index] <= 0 || orderTotal < coupon.minTotal) {
+      continue;
+    }
+    const nextCounts = counts.slice();
+    nextCounts[index] -= 1;
+    actions.push({
+      nextCounts,
+      discount: Math.min(coupon.discount, orderTotal),
+      label: `${coupon.minTotal.toLocaleString()}円以上で${coupon.discount.toLocaleString()}円引き`,
+    });
+  }
+
+  return actions;
+}
+
 function candidateCashValues(
-  pAvail: number,
+  pointBalance: number,
+  payableTotal: number,
   orderTotal: number,
-  remainingTotal: number,
+  allowSpecialCouponUse: boolean,
+  futureTarget: number,
   params: Params,
   num: number,
   den: number
 ): number[] {
-  const cashMin = Math.max(0, orderTotal - Math.min(pAvail, orderTotal));
-  const cashMax = orderTotal;
+  const usableSpecialCoupon = allowSpecialCouponUse ? Math.min(pointBalance, payableTotal) : 0;
+  const cashMin = Math.max(0, payableTotal - usableSpecialCoupon);
+  const cashMax = payableTotal;
+  const values = new Set<number>([cashMin, cashMax]);
 
-  // 最大 8 個の候補を収集する
-  const buf: number[] = [cashMin];
-  if (cashMax !== cashMin) buf.push(cashMax);
-
-  const addU = (v: number) => {
-    if (v < cashMin || v > cashMax) return;
-    for (let k = 0; k < buf.length; k++) if (buf[k] === v) return;
-    buf.push(v);
+  const add = (value: number) => {
+    if (value >= cashMin && value <= cashMax) {
+      values.add(value);
+    }
   };
 
-  for (const target of [remainingTotal, Math.max(0, remainingTotal - params.unitPriceTaxIn)]) {
-    const epMin = endPoints(pAvail, cashMin, orderTotal, params, num, den);
-    if (epMin >= target) {
-      addU(cashMin + 1);
+  const targets = [
+    0,
+    futureTarget,
+    Math.max(0, futureTarget - params.unitPriceTaxIn),
+  ];
+
+  for (const target of targets) {
+    const minEndPoints = endPoints(pointBalance, cashMin, payableTotal, orderTotal, params, num, den);
+    if (minEndPoints >= target) {
+      add(cashMin + 1);
       continue;
     }
-    const epMax = endPoints(pAvail, cashMax, orderTotal, params, num, den);
-    if (epMax < target) continue;
 
-    let lo: number;
-    if (params.taxExMethod === "ratio_floor") {
-      // 解析的推定: cash ≈ T * den / (den + num)
-      const T = target - pAvail + orderTotal;
-      lo = Math.max(cashMin, Math.min(cashMax, Math.ceil(T * den / (den + num))));
-      // 左側に戻りながら下限を確定（最大 den ステップ）
-      while (lo > cashMin && endPoints(pAvail, lo - 1, orderTotal, params, num, den) >= target) lo--;
-      // 右側に進んで条件を満たす位置まで（最大 den ステップ）
-      while (endPoints(pAvail, lo, orderTotal, params, num, den) < target && lo < cashMax) lo++;
-    } else {
-      // taxex_floor_then_rate: 二分探索
-      let hi = cashMax;
-      lo = cashMin;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (endPoints(pAvail, mid, orderTotal, params, num, den) >= target) hi = mid;
-        else lo = mid + 1;
+    const maxEndPoints = endPoints(pointBalance, cashMax, payableTotal, orderTotal, params, num, den);
+    if (maxEndPoints < target) {
+      continue;
+    }
+
+    let lo = cashMin;
+    let hi = cashMax;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      const pointsAfter = endPoints(pointBalance, mid, payableTotal, orderTotal, params, num, den);
+      if (pointsAfter >= target) {
+        hi = mid;
+      } else {
+        lo = mid + 1;
       }
     }
-    addU(lo - 1);
-    addU(lo);
-    addU(lo + 1);
+
+    add(lo - 1);
+    add(lo);
+    add(lo + 1);
   }
 
-  return buf.sort((a, b) => a - b);
+  return Array.from(values).sort((a, b) => a - b);
 }
 
-// ---------------------------------------------------------------------------
-// 親情報
-// ---------------------------------------------------------------------------
-type ParentInfo = {
-  pi: number;       // 親の i（購入済み枚数）
-  pp: number;       // 親の p（ポイント残高、キャップ済み）
-  qty: number;
-  cashPaid: number;
-  pointsUsed: number;
-  orderTotal: number;
-};
+function countOrders(
+  items: number,
+  pointBalance: number,
+  couponState: string,
+  layers: Map<string, LayerEntry>[]
+): number {
+  let total = 0;
+  let currentItems = items;
+  let currentPointBalance = pointBalance;
+  let currentCouponState = couponState;
 
-// ---------------------------------------------------------------------------
-// 連続ポイント未使用注文の統合（後処理）
-// ---------------------------------------------------------------------------
-
-/**
- * 連続する「ポイント未使用 かつ 付与対象」の注文をまとめて1注文に統合する。
- *
- * eligible=false の注文は除外する。統合すると注文合計が付与閾値を超えてポイントが
- * 新たに発生し、DP が想定していた残高と乖離するため。
- *
- * eligible=true の連続注文を統合しても floor の超加法性から獲得ポイントは
- * 統合前の合計以上になるため、キャッシュ支払い総額は不変かつポイント残高は改善。
- */
-function consolidateOrders(
-  orders: OrderRow[],
-  params: Params,
-  num: number,
-  den: number,
-  startPoints: number
-): OrderRow[] {
-  if (orders.length <= 1) return orders;
-
-  // Step 1: 統合後の (qty, cashPaid, pointsUsed) リストを構築
-  type Step = { qty: number; cashPaid: number; pointsUsed: number };
-  const steps: Step[] = [];
-  let i = 0;
-
-  while (i < orders.length) {
-    if (orders[i].pointsUsed === 0 && orders[i].eligible) {
-      // 連続する eligible かつ pointsUsed=0 の注文を収集
-      let j = i + 1;
-      while (j < orders.length && orders[j].pointsUsed === 0 && orders[j].eligible) j++;
-
-      if (j > i + 1) {
-        const run = orders.slice(i, j);
-        steps.push({
-          qty: run.reduce((s, o) => s + o.qty, 0),
-          cashPaid: run.reduce((s, o) => s + o.cashPaid, 0),
-          pointsUsed: 0,
-        });
-        i = j;
-        continue;
-      }
+  while (true) {
+    const entry = layers[currentItems].get(`${currentPointBalance}|${currentCouponState}`);
+    if (!entry?.parent) {
+      return total;
     }
-    steps.push({ qty: orders[i].qty, cashPaid: orders[i].cashPaid, pointsUsed: orders[i].pointsUsed });
-    i++;
+    total += 1;
+    currentItems = entry.parent.prevItems;
+    currentPointBalance = entry.parent.prevPoints;
+    currentCouponState = entry.parent.prevCouponKey;
   }
-
-  if (steps.length === orders.length) return orders; // 統合なし
-
-  // Step 2: 再シミュレーションで各注文のポイント残高を再計算
-  let pBal = startPoints;
-  return steps.map((step, idx) => {
-    const { qty, cashPaid, pointsUsed } = step;
-    const orderTotal = cashPaid + pointsUsed;
-    const eligible = isEligible(orderTotal, cashPaid, params.minEligibleTotal, params.eligibleBasis);
-    const earned = calcPointsEarned(cashPaid, orderTotal, params, num, den);
-    pBal = pBal - pointsUsed + earned;
-    return {
-      index: idx + 1,
-      qty,
-      orderTotal,
-      pointsUsed,
-      cashPaid,
-      pointsEarned: earned,
-      pointsBalance: pBal,
-      eligible,
-    };
-  });
 }
 
-// ---------------------------------------------------------------------------
-// メインソルバー（レイヤー別 DP）
-// ---------------------------------------------------------------------------
 export function solve(n: number, params: Params, startPoints = 0): SolveResult | null {
-  const startMs = Date.now();
+  const startedAt = Date.now();
+  const coupons = normalizeCoupons(params.coupons);
   const [num, den] = ratioNumDen(params.pointRate, params.taxRate);
-  const P = params.unitPriceTaxIn;
-  const startP = Math.min(Math.max(0, Math.floor(startPoints)), n * P);
+  const unitPrice = params.unitPriceTaxIn;
+  const startPointBalance = Math.min(Math.max(0, Math.floor(startPoints)), n * unitPrice);
+  const startCouponCounts = coupons.map((coupon) => coupon.count);
+  const startCouponKey = couponKey(startCouponCounts);
+  const keepLowerPointsOnTie = params.objective === "min_cash_then_min_leftover";
 
-  // ---------------------------------------------------------------------------
-  // 量子化ステップ Q の決定
-  // N≤70 は精密解（Q=1）。N>70 は ops ≈ n × (n×P/Q) × 110 ≤ 60M を目標に設定。
-  // 定数 550_000 = 60_000_000 / 110（110 = q候補数~22 × cash候補数~5）
-  // ---------------------------------------------------------------------------
-  const Q = n <= 70 ? 1 : Math.max(1, Math.ceil(n * n * P / 550_000));
-  const startPQ = Q > 1 ? Math.floor(startP / Q) * Q : startP;
+  const layers: Map<string, LayerEntry>[] = Array.from({ length: n + 1 }, () => new Map());
+  const frontiers: Map<string, Frontier>[] = Array.from({ length: n + 1 }, () => new Map());
+  layers[0].set(`${startPointBalance}|${startCouponKey}`, { cost: 0, parent: null });
+  frontiers[0].set(startCouponKey, new Frontier());
+  frontiers[0].get(startCouponKey)?.insert(startPointBalance, 0, keepLowerPointsOnTie);
 
-  // 数値キーエンコード: key = p (各 layer で独立管理)
-  // layer[i] : p → { cost, parent }
-  type LayerEntry = { cost: number; parent: ParentInfo | null };
-  const layers: Map<number, LayerEntry>[] = Array.from({ length: n + 1 }, () => new Map());
-  layers[0].set(startPQ, { cost: 0, parent: null });
-
-  // 各 i でのフロンティア（支配関係の管理）
-  const frontiers: Frontier[] = Array.from({ length: n + 1 }, () => new Frontier());
-  frontiers[0].insert(startPQ, 0);
-
-  const TIME_LIMIT_MS = 8000; // 8 秒で打ち切り → exact: false で返す
   let isExact = true;
 
-  // i=0 から n-1 まで前進
-  for (let i = 0; i < n; i++) {
-    if (Date.now() - startMs > TIME_LIMIT_MS) {
+  for (let purchased = 0; purchased < n; purchased += 1) {
+    if (Date.now() - startedAt > TIME_LIMIT_MS) {
       isExact = false;
       break;
     }
-    const layer = layers[i];
-    if (layer.size === 0) continue;
 
-    const qs = qCandidates(n - i, params);
+    const currentLayer = layers[purchased];
+    if (currentLayer.size === 0) {
+      continue;
+    }
 
-    for (const q of qs) {
-      const i2 = i + q;
-      if (i2 > n) continue;
-      const orderTotal = q * P;
-      const remainingTotal = (n - i2) * P;
-      const frontier2 = frontiers[i2];
-      const layer2 = layers[i2];
+    const quantities = qCandidates(n - purchased, params);
+    for (const qty of quantities) {
+      const nextPurchased = purchased + qty;
+      const orderTotal = qty * unitPrice;
+      const isFinalStep = nextPurchased === n;
+      const nextLayer = layers[nextPurchased];
+      const nextFrontiers = frontiers[nextPurchased];
 
-      // 最終ステップ（i2 === n）ではポイントのキャップを行わない。
-      // 実際の余剰ポイントを保持して "min_cash_then_min_leftover" を正しく処理する。
-      const isFinalStep = i2 === n;
+      for (const [stateKey, entry] of currentLayer) {
+        const separator = stateKey.indexOf("|");
+        const pointBalance = parseInt(stateKey.slice(0, separator), 10);
+        const currentCouponKey = stateKey.slice(separator + 1);
+        const counts = parseCouponKey(currentCouponKey);
 
-      for (const [p, { cost }] of layer) {
-        const cashList = candidateCashValues(p, orderTotal, remainingTotal, params, num, den);
+        for (const action of couponActions(coupons, counts, orderTotal)) {
+          const payableTotal = Math.max(0, orderTotal - action.discount);
+          const remainingItems = n - nextPurchased;
+          const futureCouponDiscount = maxFutureCouponDiscount(
+            coupons,
+            action.nextCounts,
+            remainingItems,
+            unitPrice
+          );
+          const futureTarget = Math.max(0, remainingItems * unitPrice - futureCouponDiscount);
+          const nextCouponKey = couponKey(action.nextCounts);
+          const cashValues = candidateCashValues(
+            pointBalance,
+            payableTotal,
+            orderTotal,
+            action.discount === 0,
+            futureTarget,
+            params,
+            num,
+            den
+          );
 
-        for (const cash of cashList) {
-          const used = orderTotal - cash;
-          if (used > p) continue;
+          for (const cashPaid of cashValues) {
+            const pointsUsed = payableTotal - cashPaid;
+            if (pointsUsed > pointBalance) {
+              continue;
+            }
 
-          const earned = calcPointsEarned(cash, orderTotal, params, num, den);
-          let p2 = p - used + earned;
-          // 中間ステップのみ量子化＋キャップ。最終ステップは実際の値を保持。
-          if (!isFinalStep) {
-            if (Q > 1) p2 = Math.floor(p2 / Q) * Q;
-            if (p2 > remainingTotal) p2 = remainingTotal;
-          }
+            const earned = calcPointsEarned(cashPaid, orderTotal, params, num, den);
+            const nextPointBalance = pointBalance - pointsUsed + earned;
+            const nextCost = entry.cost + cashPaid;
+            const nextStateKey = `${nextPointBalance}|${nextCouponKey}`;
 
-          const cost2 = cost + cash;
+            if (!isFinalStep) {
+              let frontier = nextFrontiers.get(nextCouponKey);
+              if (!frontier) {
+                frontier = new Frontier();
+                nextFrontiers.set(nextCouponKey, frontier);
+              }
+              if (frontier.dominated(nextPointBalance, nextCost, keepLowerPointsOnTie)) {
+                continue;
+              }
+              if (!frontier.insert(nextPointBalance, nextCost, keepLowerPointsOnTie)) {
+                continue;
+              }
+            }
 
-          // 最終ステップでは Pareto 支配チェックをスキップ（目的は leftover 最小化）
-          if (!isFinalStep) {
-            if (frontier2.dominated(p2, cost2)) continue;
-            if (!frontier2.insert(p2, cost2)) continue;
-          }
+            const currentBest = nextLayer.get(nextStateKey);
+            if (currentBest && currentBest.cost <= nextCost) {
+              continue;
+            }
 
-          const existing = layer2.get(p2);
-          if (existing === undefined || cost2 < existing.cost) {
-            layer2.set(p2, {
-              cost: cost2,
-              parent: { pi: i, pp: p, qty: q, cashPaid: cash, pointsUsed: used, orderTotal },
+            nextLayer.set(nextStateKey, {
+              cost: nextCost,
+              parent: {
+                prevItems: purchased,
+                prevPoints: pointBalance,
+                prevCouponKey: currentCouponKey,
+                qty,
+                orderTotal,
+                couponDiscount: action.discount,
+                couponApplied: action.label,
+                pointsUsed,
+                cashPaid,
+              },
             });
           }
         }
@@ -391,117 +426,100 @@ export function solve(n: number, params: Params, startPoints = 0): SolveResult |
     }
   }
 
-  // 時間切れの場合は到達済みの最善値を探す
   const finalLayer = layers[n];
-  if (!isExact && finalLayer.size === 0) {
-    // n まで到達した状態がなければ、最も多く買えた状態から greedy で補完
-    // ここでは null を返して API 側で 503 を返す
+  if (finalLayer.size === 0) {
     return null;
   }
-  if (finalLayer.size === 0) return null;
 
-  // 最終ステップは Pareto frontier を使っていないので layer から直接集計する
-  let minCost = Infinity;
+  let minCost = Number.POSITIVE_INFINITY;
   for (const entry of finalLayer.values()) {
-    if (entry.cost < minCost) minCost = entry.cost;
+    minCost = Math.min(minCost, entry.cost);
   }
 
-  // minCost のエントリーを全列挙
-  const finalCandidatePs: number[] = [];
-  for (const [p, entry] of finalLayer) {
-    if (entry.cost === minCost) finalCandidatePs.push(p);
+  const finalStates: Array<{ pointBalance: number; couponState: string }> = [];
+  for (const [stateKey, entry] of finalLayer) {
+    if (entry.cost !== minCost) {
+      continue;
+    }
+    const separator = stateKey.indexOf("|");
+    finalStates.push({
+      pointBalance: parseInt(stateKey.slice(0, separator), 10),
+      couponState: stateKey.slice(separator + 1),
+    });
   }
 
-  let finalP: number;
+  let chosen = finalStates[0];
   if (params.objective === "min_cash_then_min_leftover") {
-    // 実際の leftover（= final layer の p 値）を最小化
-    finalP = Math.min(...finalCandidatePs);
+    for (const candidate of finalStates) {
+      if (candidate.pointBalance < chosen.pointBalance) {
+        chosen = candidate;
+      }
+    }
   } else {
-    // min_cash_then_min_orders: 注文回数最小
-    let bestCount = Infinity;
-    finalP = finalCandidatePs[0];
-    for (const cp of finalCandidatePs) {
-      const count = countOrders(n, cp, layers);
-      if (count < bestCount) {
-        bestCount = count;
-        finalP = cp;
+    let bestOrderCount = Number.POSITIVE_INFINITY;
+    for (const candidate of finalStates) {
+      const orderCount = countOrders(n, candidate.pointBalance, candidate.couponState, layers);
+      if (orderCount < bestOrderCount) {
+        bestOrderCount = orderCount;
+        chosen = candidate;
       }
     }
   }
 
-  // 経路復元
   const steps: ParentInfo[] = [];
-  {
-    let ci = n;
-    let cp = finalP;
-    while (true) {
-      const entry = layers[ci].get(cp);
-      if (!entry || !entry.parent) break;
-      steps.push(entry.parent);
-      ci = entry.parent.pi;
-      cp = entry.parent.pp;
+  let currentItems = n;
+  let currentPointBalance = chosen.pointBalance;
+  let currentCouponState = chosen.couponState;
+  while (true) {
+    const entry = layers[currentItems].get(`${currentPointBalance}|${currentCouponState}`);
+    if (!entry?.parent) {
+      break;
     }
+    steps.push(entry.parent);
+    currentItems = entry.parent.prevItems;
+    currentPointBalance = entry.parent.prevPoints;
+    currentCouponState = entry.parent.prevCouponKey;
   }
   steps.reverse();
 
-  // シミュレーション（表示用）
-  let pBal = startP;
+  let pointBalance = startPointBalance;
   let cashTotal = 0;
+  let couponDiscountTotal = 0;
   const orders: OrderRow[] = [];
 
-  for (let idx = 0; idx < steps.length; idx++) {
-    const { qty, cashPaid, pointsUsed, orderTotal } = steps[idx];
-    const eligible = isEligible(orderTotal, cashPaid, params.minEligibleTotal, params.eligibleBasis);
-    const earned = calcPointsEarned(cashPaid, orderTotal, params, num, den);
-    pBal = pBal - pointsUsed + earned;
-    cashTotal += cashPaid;
+  for (let index = 0; index < steps.length; index += 1) {
+    const step = steps[index];
+    const pointsEarned = calcPointsEarned(step.cashPaid, step.orderTotal, params, num, den);
+    pointBalance = pointBalance - step.pointsUsed + pointsEarned;
+    cashTotal += step.cashPaid;
+    couponDiscountTotal += step.couponDiscount;
 
     orders.push({
-      index: idx + 1,
-      qty,
-      orderTotal,
-      pointsUsed,
-      cashPaid,
-      pointsEarned: earned,
-      pointsBalance: pBal,
-      eligible,
+      index: index + 1,
+      qty: step.qty,
+      orderTotal: step.orderTotal,
+      couponDiscount: step.couponDiscount,
+      couponApplied: step.couponApplied,
+      pointsUsed: step.pointsUsed,
+      cashPaid: step.cashPaid,
+      pointsEarned,
+      pointsBalance: pointBalance,
+      eligible: isEligible(step.orderTotal, step.cashPaid, params),
     });
   }
 
-  // 後処理: 連続するポイント未使用注文を統合
-  const consolidatedOrders = consolidateOrders(orders, params, num, den, startP);
-  const leftoverPoints = consolidatedOrders.length > 0
-    ? consolidatedOrders[consolidatedOrders.length - 1].pointsBalance
-    : startP;
-
   return {
     summary: {
-      orderCount: consolidatedOrders.length,
+      orderCount: orders.length,
       cashTotal,
-      leftoverPoints,
-      grossTotal: n * P,
+      leftoverPoints: pointBalance,
+      grossTotal: n * unitPrice,
+      couponDiscountTotal,
     },
-    orders: consolidatedOrders,
+    orders,
     meta: {
       exact: isExact,
-      timeMs: Date.now() - startMs,
+      timeMs: Date.now() - startedAt,
     },
   };
-}
-
-function countOrders(
-  ni: number,
-  pi: number,
-  layers: Map<number, { cost: number; parent: ParentInfo | null }>[]
-): number {
-  let count = 0;
-  let ci = ni, cp = pi;
-  while (true) {
-    const entry = layers[ci].get(cp);
-    if (!entry || !entry.parent) break;
-    ci = entry.parent.pi;
-    cp = entry.parent.pp;
-    count++;
-  }
-  return count;
 }
