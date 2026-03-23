@@ -243,6 +243,15 @@ function qCandidates(remItems: number, params: Params): number[] {
   for (let delta = -Q_THRESHOLD_NEAR; delta <= Q_THRESHOLD_NEAR; delta += 1) {
     add(thresholdQty + delta);
   }
+  const coupons = params.coupons ?? [];
+  for (const coupon of coupons) {
+    if (coupon.minTotal > 0 && coupon.discount > 0 && coupon.count > 0) {
+      const couponThresholdQty = Math.ceil(coupon.minTotal / params.unitPriceTaxIn);
+      for (let delta = -Q_THRESHOLD_NEAR; delta <= Q_THRESHOLD_NEAR; delta += 1) {
+        add(couponThresholdQty + delta);
+      }
+    }
+  }
   for (let offset = 0; offset <= Math.min(Q_TAIL_WINDOW, remItems - 1); offset += 1) {
     add(remItems - offset);
   }
@@ -657,6 +666,8 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
   frontiers[0].get(startCouponKey)?.insert(startPointBalance, 0, keepLowerPointsOnTie);
 
   let didTimeout = false;
+  let iterationCount = 0;
+  const TIMEOUT_CHECK_INTERVAL = 2000;
 
   for (let purchased = 0; purchased < n; purchased += 1) {
     if (Date.now() - startedAt > TIME_LIMIT_MS) {
@@ -679,6 +690,10 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
       const nextFrontiers = frontiers[nextPurchased];
 
       for (const [currentCouponKey, pointEntries] of currentLayer) {
+        if (++iterationCount % TIMEOUT_CHECK_INTERVAL === 0 && Date.now() - startedAt > TIME_LIMIT_MS) {
+          didTimeout = true;
+          break;
+        }
         const currentCouponState = getCouponStateData(currentCouponKey, couponStateCache);
         const currentRemainingItems = n - purchased;
         const currentFutureDiscountKey = `${currentRemainingItems}|${currentCouponState.key}`;
@@ -822,8 +837,11 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
             }
           }
         }
+        if (didTimeout) break;
       }
+      if (didTimeout) break;
     }
+    if (didTimeout) break;
   }
 
   const finalLayer = layers[n];
