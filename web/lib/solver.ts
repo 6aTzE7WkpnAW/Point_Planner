@@ -191,6 +191,42 @@ function qCandidates(remItems: number, params: Params): number[] {
   return result.sort((a, b) => a - b);
 }
 
+function greedyUpperBound(
+  totalItems: number,
+  startPoints: number,
+  startCouponCounts: number[],
+  unitPrice: number,
+  coupons: Coupon[]
+): number {
+  const orderTotal = totalItems * unitPrice;
+  let bestCouponDiscount = 0;
+
+  for (let index = 0; index < coupons.length; index += 1) {
+    if (startCouponCounts[index] <= 0 || orderTotal < coupons[index].minTotal) {
+      continue;
+    }
+    bestCouponDiscount = Math.max(bestCouponDiscount, Math.min(coupons[index].discount, orderTotal));
+  }
+
+  const payableWithCoupon = orderTotal - bestCouponDiscount;
+  let bestCash = payableWithCoupon;
+
+  if (bestCouponDiscount === 0) {
+    bestCash = Math.min(bestCash, Math.max(0, orderTotal - startPoints));
+  }
+
+  return bestCash;
+}
+
+function optimisticRemainingCashLowerBound(
+  remainingItems: number,
+  pointBalance: number,
+  futureCouponDiscount: number,
+  unitPrice: number
+): number {
+  return Math.max(0, remainingItems * unitPrice - pointBalance - futureCouponDiscount);
+}
+
 function maxFutureCouponDiscount(
   coupons: Coupon[],
   counts: number[],
@@ -425,6 +461,7 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
   const futureDiscountCache = new Map<string, number>();
   const cashCandidateCache = new Map<string, number[]>();
   const keepLowerPointsOnTie = params.objective === "min_cash_then_min_leftover";
+  let bestKnownCost = greedyUpperBound(n, startPointBalance, startCouponCounts, unitPrice, coupons);
 
   const layers: Map<string, Map<number, LayerEntry>>[] = Array.from({ length: n + 1 }, () => new Map());
   const frontiers: Map<string, Frontier>[] = Array.from({ length: n + 1 }, () => new Map());
@@ -446,7 +483,8 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
     }
 
     const quantities = qCandidates(n - purchased, params);
-    for (const qty of quantities) {
+    for (let quantityIndex = quantities.length - 1; quantityIndex >= 0; quantityIndex -= 1) {
+      const qty = quantities[quantityIndex];
       const nextPurchased = purchased + qty;
       const orderTotal = qty * unitPrice;
       const isFinalStep = nextPurchased === n;
@@ -455,7 +493,31 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
 
       for (const [currentCouponKey, pointEntries] of currentLayer) {
         const currentCouponState = getCouponStateData(currentCouponKey, couponStateCache);
+        const currentRemainingItems = n - purchased;
+        const currentFutureDiscountKey = `${currentRemainingItems}|${currentCouponState.key}`;
+        let currentFutureCouponDiscount = futureDiscountCache.get(currentFutureDiscountKey);
+        if (currentFutureCouponDiscount === undefined) {
+          currentFutureCouponDiscount = maxFutureCouponDiscount(
+            coupons,
+            currentCouponState.counts,
+            currentRemainingItems,
+            unitPrice
+          );
+          futureDiscountCache.set(currentFutureDiscountKey, currentFutureCouponDiscount);
+        }
         for (const [pointBalance, entry] of pointEntries) {
+          const currentLowerBound =
+            entry.cost
+            + optimisticRemainingCashLowerBound(
+              currentRemainingItems,
+              pointBalance,
+              currentFutureCouponDiscount,
+              unitPrice
+            );
+
+          if (currentLowerBound > bestKnownCost) {
+            continue;
+          }
 
           for (const action of getCouponActionsForState(coupons, currentCouponState, orderTotal, couponStateCache)) {
             const payableTotal = Math.max(0, orderTotal - action.discount);
@@ -504,6 +566,16 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
               const earned = calcPointsEarned(cashPaid, orderTotal, params, num, den);
               const nextPointBalance = pointBalance - pointsUsed + earned;
               const nextCost = entry.cost + cashPaid;
+              const lowerBound =
+                nextCost + optimisticRemainingCashLowerBound(remainingItems, nextPointBalance, futureCouponDiscount, unitPrice);
+
+              if (lowerBound > bestKnownCost) {
+                continue;
+              }
+
+              if (isFinalStep && nextCost < bestKnownCost) {
+                bestKnownCost = nextCost;
+              }
 
               if (!isFinalStep) {
                 let frontier = nextFrontiers.get(nextCouponKey);
