@@ -59,7 +59,7 @@ function ratioNumDen(pointRate: number, taxRate: number): [number, number] {
 }
 
 function normalizeCoupons(coupons?: Coupon[]): Coupon[] {
-  return (coupons ?? [])
+  const normalized = (coupons ?? [])
     .map((coupon) => ({
       minTotal: Math.max(0, Math.floor(coupon.minTotal)),
       discount: Math.max(0, Math.floor(coupon.discount)),
@@ -67,6 +67,22 @@ function normalizeCoupons(coupons?: Coupon[]): Coupon[] {
     }))
     .filter((coupon) => coupon.discount > 0 && coupon.count > 0)
     .sort((a, b) => (a.minTotal - b.minTotal) || (a.discount - b.discount));
+
+  if (normalized.length <= 1) {
+    return normalized;
+  }
+
+  const merged: Coupon[] = [];
+  for (const coupon of normalized) {
+    const lastCoupon = merged[merged.length - 1];
+    if (lastCoupon && lastCoupon.minTotal === coupon.minTotal && lastCoupon.discount === coupon.discount) {
+      lastCoupon.count += coupon.count;
+      continue;
+    }
+    merged.push({ ...coupon });
+  }
+
+  return merged;
 }
 
 function couponKey(counts: number[]): string {
@@ -556,11 +572,11 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
   frontiers[0].set(startCouponKey, new Frontier());
   frontiers[0].get(startCouponKey)?.insert(startPointBalance, 0, keepLowerPointsOnTie);
 
-  let isExact = true;
+  let didTimeout = false;
 
   for (let purchased = 0; purchased < n; purchased += 1) {
     if (Date.now() - startedAt > TIME_LIMIT_MS) {
-      isExact = false;
+      didTimeout = true;
       break;
     }
 
@@ -710,7 +726,7 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
   }
 
   const finalLayer = layers[n];
-  if (finalLayer.size === 0) {
+  if (didTimeout || finalLayer.size === 0) {
     return null;
   }
 
@@ -803,7 +819,7 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
     },
     orders,
     meta: {
-      exact: isExact,
+      exact: true,
       timeMs: Date.now() - startedAt,
     },
   };
