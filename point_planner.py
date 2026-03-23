@@ -240,7 +240,13 @@ def count_orders(items: int, point_balance: int, coupon_state: str, layers: List
 
 
 
-def build_purchase_suggestion(base_cash_total: int, target_items: int, params: Params, start_points: int):
+def build_purchase_suggestion(base_cash_total: int, target_items: int, params: Params, start_points: int, leftover_points: int):
+    if leftover_points <= 0:
+        return None
+
+    # Greedy floor: extend the existing plan by buying items purely with leftover SC.
+    greedy_extra = leftover_points // params.unit_price_tax_incl
+
     budget = base_cash_total + params.unit_price_tax_incl
     max_coupon_saving = sum(coupon.discount * coupon.count for coupon in params.coupons)
     tax_exclusive_ratio = Fraction(1, 1) / (1 + Fraction(params.tax_rate_pct, 100))
@@ -251,14 +257,18 @@ def build_purchase_suggestion(base_cash_total: int, target_items: int, params: P
         (budget + start_points + max_coupon_saving + min_effective_price - 1) // min_effective_price + 5,
     )
 
+    deadline = perf_counter() + 12.0
+
     low = target_items + 1
     high = max_possible_items
     best_result = None
     best_target_items = target_items
 
     while low <= high:
+        if perf_counter() > deadline:
+            break
         mid = (low + high) // 2
-        candidate = solve(mid, params, start_points, include_suggestion=False)
+        candidate = solve(mid, params, start_points, include_suggestion=False, time_limit_s=3.0)
         if candidate is None:
             high = mid - 1
             continue
@@ -270,21 +280,30 @@ def build_purchase_suggestion(base_cash_total: int, target_items: int, params: P
         else:
             high = mid - 1
 
+    solver_extra = best_target_items - target_items
+    solver_additional_cash = max(0, best_result["cash_total"] - base_cash_total) if best_result else float("inf")
+
+    if greedy_extra > 0 and (greedy_extra >= solver_extra or solver_additional_cash > 0):
+        return {
+            "additional_cash": 0,
+            "target_items": target_items + greedy_extra,
+            "extra_items": greedy_extra,
+        }
+
     if best_result is None or best_target_items <= target_items:
         return None
 
-    additional_cash = best_result["cash_total"] - base_cash_total
-    if additional_cash <= 0 or additional_cash > params.unit_price_tax_incl:
+    if solver_additional_cash > params.unit_price_tax_incl:
         return None
 
     return {
-        "additional_cash": additional_cash,
+        "additional_cash": solver_additional_cash,
         "target_items": best_target_items,
-        "extra_items": best_target_items - target_items,
+        "extra_items": solver_extra,
     }
 
 
-def solve(n_items: int, params: Params, start_points: int = 0, include_suggestion: bool = True):
+def solve(n_items: int, params: Params, start_points: int = 0, include_suggestion: bool = True, time_limit_s: float = 8.0):
     started_at = perf_counter()
     coupons = normalize_coupons(params.coupons)
     num, den = params.ratio_num_den()
@@ -423,7 +442,7 @@ def solve(n_items: int, params: Params, start_points: int = 0, include_suggestio
 
     suggestion = None
     if include_suggestion:
-        suggestion = build_purchase_suggestion(cash_total, n_items, params, start_points)
+        suggestion = build_purchase_suggestion(cash_total, n_items, params, start_points, point_balance)
 
     return {
         "cash_total": cash_total,

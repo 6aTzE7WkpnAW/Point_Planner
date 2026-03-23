@@ -4,6 +4,8 @@ const Q_TAIL_WINDOW = 12;
 const Q_SMALL_MAX = 12;
 const Q_THRESHOLD_NEAR = 4;
 const TIME_LIMIT_MS = 8000;
+const SUGGESTION_PER_SOLVE_MS = 3000;
+const SUGGESTION_TOTAL_MS = 12000;
 
 type CouponAction = {
   nextCounts: number[];
@@ -322,6 +324,11 @@ function buildPurchaseSuggestion(
   if (leftoverPoints <= 0) {
     return null;
   }
+
+  // Greedy floor: extend the existing plan by buying items purely with leftover SC.
+  // Each SC-only order earns 0 points, so each extra item costs exactly unitPriceTaxIn in SC.
+  const greedyExtra = Math.floor(leftoverPoints / params.unitPriceTaxIn);
+
   const budget = baseCashTotal + params.unitPriceTaxIn;
   const coupons = params.coupons ?? [];
   const maxCouponSaving = coupons.reduce((sum, coupon) => sum + coupon.discount * coupon.count, 0);
@@ -335,14 +342,17 @@ function buildPurchaseSuggestion(
     )
   );
 
+  const overallDeadline = Date.now() + SUGGESTION_TOTAL_MS;
+
   let low = targetItems + 1;
   let high = maxPossibleItems;
   let bestResult: SolveResult | null = null;
   let bestTargetItems = targetItems;
 
   while (low <= high) {
+    if (Date.now() > overallDeadline) break;
     const mid = (low + high) >> 1;
-    const candidate = solve(mid, params, startPoints, false);
+    const candidate = solve(mid, params, startPoints, false, SUGGESTION_PER_SOLVE_MS);
     if (candidate === null) {
       high = mid - 1;
       continue;
@@ -357,23 +367,37 @@ function buildPurchaseSuggestion(
     }
   }
 
+  const solverExtra = bestTargetItems - targetItems;
+  const solverAdditionalCash = bestResult
+    ? Math.max(0, bestResult.summary.cashTotal - baseCashTotal)
+    : Number.POSITIVE_INFINITY;
+
+  // Choose the better of greedy estimate (0 additional cash) and solver result.
+  // Greedy is guaranteed correct: the N-item plan + SC-only appended orders is a valid plan.
+  if (greedyExtra > 0 && (greedyExtra >= solverExtra || solverAdditionalCash > 0)) {
+    return {
+      additionalCash: 0,
+      targetItems: targetItems + greedyExtra,
+      extraItems: greedyExtra,
+    };
+  }
+
   if (!bestResult || bestTargetItems <= targetItems) {
     return null;
   }
 
-  const additionalCash = Math.max(0, bestResult.summary.cashTotal - baseCashTotal);
-  if (additionalCash > params.unitPriceTaxIn) {
+  if (solverAdditionalCash > params.unitPriceTaxIn) {
     return null;
   }
 
   return {
-    additionalCash,
+    additionalCash: solverAdditionalCash,
     targetItems: bestTargetItems,
-    extraItems: bestTargetItems - targetItems,
+    extraItems: solverExtra,
   };
 }
 
-export function solve(n: number, params: Params, startPoints = 0, includeSuggestion = true): SolveResult | null {
+export function solve(n: number, params: Params, startPoints = 0, includeSuggestion = true, timeLimitMs = TIME_LIMIT_MS): SolveResult | null {
   const startedAt = Date.now();
   const coupons = normalizeCoupons(params.coupons);
   const [num, den] = ratioNumDen(params.pointRate, params.taxRate);
@@ -392,7 +416,7 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
   let isExact = true;
 
   for (let purchased = 0; purchased < n; purchased += 1) {
-    if (Date.now() - startedAt > TIME_LIMIT_MS) {
+    if (Date.now() - startedAt > timeLimitMs) {
       isExact = false;
       break;
     }
