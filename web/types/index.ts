@@ -28,12 +28,18 @@ export interface OrderRow {
   eligible: boolean;
 }
 
+export interface PurchaseSuggestion {
+  additionalCash: number;
+  extraItems: number;
+}
+
 export interface Summary {
   orderCount: number;
   cashTotal: number;
   leftoverPoints: number;
   grossTotal: number;
   couponDiscountTotal: number;
+  suggestion: PurchaseSuggestion | null;
 }
 
 export interface SolveResult {

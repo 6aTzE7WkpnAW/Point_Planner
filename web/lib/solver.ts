@@ -311,7 +311,68 @@ function countOrders(
   }
 }
 
-export function solve(n: number, params: Params, startPoints = 0): SolveResult | null {
+
+function paramsWithCouponCounts(params: Params, counts: number[]): Params {
+  const normalizedCoupons = normalizeCoupons(params.coupons);
+  return {
+    ...params,
+    coupons: normalizedCoupons.map((coupon, index) => ({
+      ...coupon,
+      count: counts[index] ?? 0,
+    })),
+  };
+}
+
+function buildPurchaseSuggestion(leftoverPoints: number, couponState: string, params: Params) {
+  const suggestionParams = paramsWithCouponCounts(params, parseCouponKey(couponState));
+  const budget = params.unitPriceTaxIn;
+  const coupons = suggestionParams.coupons ?? [];
+  const maxCouponSaving = coupons.reduce((sum, coupon) => sum + coupon.discount * coupon.count, 0);
+  const taxExclusiveRatio = 1 / (1 + params.taxRate);
+  const minEffectivePrice = params.unitPriceTaxIn * Math.max(0.01, 1 - params.pointRate * taxExclusiveRatio);
+  const maxPossibleItems = Math.min(
+    500,
+    Math.max(1, Math.ceil((budget + leftoverPoints + maxCouponSaving) / Math.max(1, minEffectivePrice)) + 5)
+  );
+
+  let low = 1;
+  let high = maxPossibleItems;
+  let bestResult: SolveResult | null = null;
+  let bestExtraItems = 0;
+
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const candidate = solve(mid, suggestionParams, leftoverPoints, false);
+    if (candidate === null) {
+      high = mid - 1;
+      continue;
+    }
+
+    if (candidate.summary.cashTotal > 0 && candidate.summary.cashTotal <= budget) {
+      bestResult = candidate;
+      bestExtraItems = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  if (!bestResult || bestExtraItems <= 0) {
+    return null;
+  }
+
+  const additionalCash = bestResult.summary.cashTotal;
+  if (additionalCash <= 0 || additionalCash > params.unitPriceTaxIn) {
+    return null;
+  }
+
+  return {
+    additionalCash,
+    extraItems: bestExtraItems,
+  };
+}
+
+export function solve(n: number, params: Params, startPoints = 0, includeSuggestion = true): SolveResult | null {
   const startedAt = Date.now();
   const coupons = normalizeCoupons(params.coupons);
   const [num, den] = ratioNumDen(params.pointRate, params.taxRate);
@@ -515,6 +576,7 @@ export function solve(n: number, params: Params, startPoints = 0): SolveResult |
       leftoverPoints: pointBalance,
       grossTotal: n * unitPrice,
       couponDiscountTotal,
+      suggestion: includeSuggestion ? buildPurchaseSuggestion(pointBalance, chosen.couponState, params) : null,
     },
     orders,
     meta: {
