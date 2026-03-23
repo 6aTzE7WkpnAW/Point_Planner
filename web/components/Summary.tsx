@@ -8,8 +8,8 @@ export default function Summary({ result }: Props) {
   const { summary } = result;
   const suggestionText = summary.suggestion
     ? summary.suggestion.additionalCash > 0
-      ? `SC残高${summary.leftoverPoints.toLocaleString()}円を全て使い切り、さらに${summary.suggestion.additionalCash.toLocaleString()}円追加すれば、あと${summary.suggestion.extraItems}枚多く（合計${summary.suggestion.targetItems.toLocaleString()}枚）購入できます。`
-      : `SC残高${summary.leftoverPoints.toLocaleString()}円を全て使い切ることで、追加費用なしであと${summary.suggestion.extraItems}枚多く（合計${summary.suggestion.targetItems.toLocaleString()}枚）購入できます。`
+      ? `あと${summary.suggestion.additionalCash.toLocaleString()}円足すとSC残高${summary.leftoverPoints.toLocaleString()}円がきっちり使えて、${summary.suggestion.extraItems}枚多く買えますよ（計${summary.suggestion.targetItems.toLocaleString()}枚）`
+      : `SC残高${summary.leftoverPoints.toLocaleString()}円、追加なしでそのまま${summary.suggestion.extraItems}枚多く買えますよ（計${summary.suggestion.targetItems.toLocaleString()}枚）`
     : null;
   const effectiveDiscountRate =
     summary.grossTotal > 0
