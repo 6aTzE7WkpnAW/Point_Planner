@@ -6,39 +6,49 @@ interface Props {
 
 export default function Summary({ result }: Props) {
   const { summary } = result;
+  const suggestionText = summary.suggestion
+    ? `あと${summary.suggestion.additionalCash.toLocaleString()}円あれば(スペシャルクーポンと合わせて)${summary.suggestion.targetItems.toLocaleString()}枚購入できます。`
+    : null;
   const effectiveDiscountRate =
     summary.grossTotal > 0
       ? ((summary.grossTotal - summary.cashTotal) / summary.grossTotal) * 100
       : 0;
 
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-      <StatCard
-        label="現金支払総額"
-        value={`¥ ${summary.cashTotal.toLocaleString()}`}
-        sub={`定価 ¥${summary.grossTotal.toLocaleString()}`}
-        accent="bg-blue-600"
-      />
-      <StatCard
-        label="クーポン値引き"
-        value={`¥ ${summary.couponDiscountTotal.toLocaleString()}`}
-        accent="bg-rose-500"
-      />
-      <StatCard
-        label="実質割引率"
-        value={`${effectiveDiscountRate.toFixed(1)} %`}
-        accent="bg-emerald-500"
-      />
-      <StatCard
-        label="注文回数"
-        value={`${summary.orderCount} 回`}
-        accent="bg-violet-500"
-      />
-      <StatCard
-        label="最終SC残高"
-        value={`${summary.leftoverPoints.toLocaleString()} 円`}
-        accent="bg-amber-400"
-      />
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+        <StatCard
+          label="現金支払総額"
+          value={`¥ ${summary.cashTotal.toLocaleString()}`}
+          sub={`定価 ¥${summary.grossTotal.toLocaleString()}`}
+          accent="bg-blue-600"
+        />
+        <StatCard
+          label="クーポン値引き"
+          value={`¥ ${summary.couponDiscountTotal.toLocaleString()}`}
+          accent="bg-rose-500"
+        />
+        <StatCard
+          label="実質割引率"
+          value={`${effectiveDiscountRate.toFixed(1)} %`}
+          accent="bg-emerald-500"
+        />
+        <StatCard
+          label="注文回数"
+          value={`${summary.orderCount} 回`}
+          accent="bg-violet-500"
+        />
+        <StatCard
+          label="最終SC残高"
+          value={`${summary.leftoverPoints.toLocaleString()} 円`}
+          accent="bg-amber-400"
+        />
+      </div>
+      {suggestionText && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          {suggestionText}
+        </div>
+      )}
     </div>
   );
 }

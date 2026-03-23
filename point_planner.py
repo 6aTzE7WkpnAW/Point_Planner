@@ -238,7 +238,53 @@ def count_orders(items: int, point_balance: int, coupon_state: str, layers: List
         current_coupon_state = parent.prev_coupon_key
 
 
-def solve(n_items: int, params: Params, start_points: int = 0):
+
+
+def build_purchase_suggestion(base_cash_total: int, target_items: int, params: Params, start_points: int):
+    budget = base_cash_total + params.unit_price_tax_incl
+    max_coupon_saving = sum(coupon.discount * coupon.count for coupon in params.coupons)
+    tax_exclusive_ratio = Fraction(1, 1) / (1 + Fraction(params.tax_rate_pct, 100))
+    min_effective_ratio = max(Fraction(1, 100), Fraction(1, 1) - Fraction(params.point_rate_pct, 100) * tax_exclusive_ratio)
+    min_effective_price = max(1, int(params.unit_price_tax_incl * min_effective_ratio))
+    max_possible_items = max(
+        target_items + 1,
+        (budget + start_points + max_coupon_saving + min_effective_price - 1) // min_effective_price + 5,
+    )
+
+    low = target_items + 1
+    high = max_possible_items
+    best_result = None
+    best_target_items = target_items
+
+    while low <= high:
+        mid = (low + high) // 2
+        candidate = solve(mid, params, start_points, include_suggestion=False)
+        if candidate is None:
+            high = mid - 1
+            continue
+
+        if candidate["cash_total"] <= budget:
+            best_result = candidate
+            best_target_items = mid
+            low = mid + 1
+        else:
+            high = mid - 1
+
+    if best_result is None or best_target_items <= target_items:
+        return None
+
+    additional_cash = best_result["cash_total"] - base_cash_total
+    if additional_cash <= 0 or additional_cash > params.unit_price_tax_incl:
+        return None
+
+    return {
+        "additional_cash": additional_cash,
+        "target_items": best_target_items,
+        "extra_items": best_target_items - target_items,
+    }
+
+
+def solve(n_items: int, params: Params, start_points: int = 0, include_suggestion: bool = True):
     started_at = perf_counter()
     coupons = normalize_coupons(params.coupons)
     num, den = params.ratio_num_den()
@@ -375,12 +421,17 @@ def solve(n_items: int, params: Params, start_points: int = 0):
             }
         )
 
+    suggestion = None
+    if include_suggestion:
+        suggestion = build_purchase_suggestion(cash_total, n_items, params, start_points)
+
     return {
         "cash_total": cash_total,
         "leftover_points": point_balance,
         "coupon_discount_total": coupon_discount_total,
         "rows": rows,
         "time_ms": int((perf_counter() - started_at) * 1000),
+        "suggestion": suggestion,
     }
 
 
@@ -433,6 +484,12 @@ def main() -> None:
     print(f"クーポン値引き合計: {result['coupon_discount_total']} 円")
     print(f"最終スペシャルクーポン残: {result['leftover_points']} 円")
     print(f"計算時間: {result['time_ms']} ms")
+    if result["suggestion"] is not None:
+        suggestion = result["suggestion"]
+        print(
+            f"サジェスト: あと{suggestion['additional_cash']}円あれば(スペシャルクーポンと合わせて)"
+            f"{suggestion['target_items']}枚購入できます。"
+        )
     print("")
     print(f"{'回':>2} {'枚数':>4} {'注文金額':>10} {'通常CP':>10} {'使用SC':>8} {'支払現金':>10} {'獲得SC':>8} {'残SC':>8}")
     print("-" * 76)
