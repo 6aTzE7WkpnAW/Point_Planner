@@ -28,6 +28,15 @@ type LayerEntry = {
   parent: ParentInfo | null;
 };
 
+type MergedOrderGroup = {
+  startIndex: number;
+  endIndex: number;
+  qty: number;
+  orderTotal: number;
+  cashPaid: number;
+  pointsEarned: number;
+};
+
 type CouponStateData = {
   counts: number[];
   key: string;
@@ -387,6 +396,84 @@ function countOrders(
   }
 }
 
+function canMergeCashOnlyOrders(group: MergedOrderGroup, nextStep: ParentInfo, params: Params, num: number, den: number): boolean {
+  if (nextStep.pointsUsed !== 0 || nextStep.couponDiscount !== 0 || nextStep.cashPaid !== nextStep.orderTotal) {
+    return false;
+  }
+
+  const mergedOrderTotal = group.orderTotal + nextStep.orderTotal;
+  const mergedCashPaid = group.cashPaid + nextStep.cashPaid;
+  return calcPointsEarned(mergedCashPaid, mergedOrderTotal, params, num, den) === group.pointsEarned + calcPointsEarned(nextStep.cashPaid, nextStep.orderTotal, params, num, den);
+}
+
+function mergeCashOnlyOrders(steps: ParentInfo[], params: Params, num: number, den: number): ParentInfo[] {
+  if (steps.length <= 1) {
+    return steps;
+  }
+
+  const groupsByStart = new Map<number, MergedOrderGroup>();
+  const coveredIndexes = new Set<number>();
+  let currentGroup: MergedOrderGroup | null = null;
+
+  for (let index = 0; index < steps.length; index += 1) {
+    const step = steps[index];
+    if (step.pointsUsed !== 0 || step.couponDiscount !== 0 || step.cashPaid !== step.orderTotal) {
+      currentGroup = null;
+      continue;
+    }
+
+    const pointsEarned = calcPointsEarned(step.cashPaid, step.orderTotal, params, num, den);
+    if (
+      currentGroup !== null &&
+      currentGroup.endIndex === index - 1 &&
+      canMergeCashOnlyOrders(currentGroup, step, params, num, den)
+    ) {
+      currentGroup.endIndex = index;
+      currentGroup.qty += step.qty;
+      currentGroup.orderTotal += step.orderTotal;
+      currentGroup.cashPaid += step.cashPaid;
+      currentGroup.pointsEarned += pointsEarned;
+      coveredIndexes.add(index);
+      continue;
+    }
+
+    currentGroup = {
+      startIndex: index,
+      endIndex: index,
+      qty: step.qty,
+      orderTotal: step.orderTotal,
+      cashPaid: step.cashPaid,
+      pointsEarned,
+    };
+    groupsByStart.set(index, currentGroup);
+  }
+
+  const mergedSteps: ParentInfo[] = [];
+  for (let index = 0; index < steps.length; index += 1) {
+    if (coveredIndexes.has(index)) {
+      continue;
+    }
+
+    const group = groupsByStart.get(index);
+    if (group && group.endIndex > group.startIndex) {
+      const firstStep = steps[group.startIndex];
+      mergedSteps.push({
+        ...firstStep,
+        qty: group.qty,
+        orderTotal: group.orderTotal,
+        couponDiscount: 0,
+        couponApplied: null,
+        pointsUsed: 0,
+        cashPaid: group.cashPaid,
+      });
+      continue;
+    }
+
+    mergedSteps.push(steps[index]);
+  }
+
+  return mergedSteps;
+}
 
 function buildPurchaseSuggestion(
   baseCashTotal: number,
@@ -677,14 +764,15 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
     currentCouponState = entry.parent.prevCouponKey;
   }
   steps.reverse();
+  const displaySteps = mergeCashOnlyOrders(steps, params, num, den);
 
   let pointBalance = startPointBalance;
   let cashTotal = 0;
   let couponDiscountTotal = 0;
   const orders: OrderRow[] = [];
 
-  for (let index = 0; index < steps.length; index += 1) {
-    const step = steps[index];
+  for (let index = 0; index < displaySteps.length; index += 1) {
+    const step = displaySteps[index];
     const pointsEarned = calcPointsEarned(step.cashPaid, step.orderTotal, params, num, den);
     pointBalance = pointBalance - step.pointsUsed + pointsEarned;
     cashTotal += step.cashPaid;

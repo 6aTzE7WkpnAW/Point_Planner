@@ -15,6 +15,8 @@ export default function Summary({ result }: Props) {
     summary.grossTotal > 0
       ? ((summary.grossTotal - summary.cashTotal) / summary.grossTotal) * 100
       : 0;
+  const itemCount = result.orders.reduce((sum, row) => sum + row.qty, 0);
+  const effectiveUnitCashPrice = itemCount > 0 ? summary.cashTotal / itemCount : 0;
 
   return (
     <div className="space-y-3">
@@ -33,6 +35,7 @@ export default function Summary({ result }: Props) {
         <StatCard
           label="実質割引率"
           value={`${effectiveDiscountRate.toFixed(1)} %`}
+          sub={`取得単価 ¥${effectiveUnitCashPrice.toFixed(1)} /枚`}
           accent="bg-emerald-500"
         />
         <StatCard
