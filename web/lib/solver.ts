@@ -284,13 +284,24 @@ function maxFutureCouponDiscount(
       continue;
     }
 
-    for (let used = 0; used < availableCount; used += 1) {
-      for (let items = remainingItems; items >= minItemsNeeded; items -= 1) {
-        bestByItems[items] = Math.max(
-          bestByItems[items],
-          bestByItems[items - minItemsNeeded] + coupons[index].discount
-        );
+    // Binary splitting: O(log(availableCount)) passes instead of O(availableCount)
+    const discount = coupons[index].discount;
+    let remaining = availableCount;
+    let k = 1;
+    while (remaining > 0) {
+      const groupSize = Math.min(k, remaining);
+      const groupWeight = groupSize * minItemsNeeded;
+      const groupValue = groupSize * discount;
+      if (groupWeight <= remainingItems) {
+        for (let items = remainingItems; items >= groupWeight; items -= 1) {
+          const candidate = bestByItems[items - groupWeight] + groupValue;
+          if (candidate > bestByItems[items]) {
+            bestByItems[items] = candidate;
+          }
+        }
       }
+      remaining -= groupSize;
+      k *= 2;
     }
   }
 
