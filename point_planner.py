@@ -474,8 +474,8 @@ def main() -> None:
     parser.add_argument("n", type=int, help="購入したい枚数")
     parser.add_argument("--start-points", type=int, default=0, help="開始時スペシャルクーポン残高")
     parser.add_argument("--unit", type=int, default=1800, help="1枚の税込価格")
-    parser.add_argument("--tax", type=int, default=10, help="税率（%）")
-    parser.add_argument("--rate", type=int, default=20, help="スペシャルクーポン還元率（%）")
+    parser.add_argument("--tax", type=int, default=10, help="税率（%%）")
+    parser.add_argument("--rate", type=int, default=20, help="スペシャルクーポン還元率（%%）")
     parser.add_argument("--min", dest="min_total", type=int, default=10000, help="スペシャルクーポン付与最低金額")
     parser.add_argument("--basis", choices=["order_total", "cash"], default="order_total", help="スペシャルクーポン付与条件の判定基準")
     parser.add_argument(

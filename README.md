@@ -2,7 +2,7 @@
 
 HMVスペシャルクーポン利用と通常クーポンを含めて、同一商品の分割購入プランを試算するツールです。
 
-Web UI は `web/`、CLI は [point_planner.py](/C:/Users/sotas/projects/point_planner/point_planner.py) を使います。
+Web UI は `web/`、CLI は [`point_planner.py`](./point_planner.py) を使います。
 
 ## 前提
 
