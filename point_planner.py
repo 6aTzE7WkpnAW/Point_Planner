@@ -5,12 +5,14 @@ from bisect import bisect_left
 from dataclasses import dataclass
 from fractions import Fraction
 from time import perf_counter
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 
 Q_TAIL_WINDOW = 12
 Q_SMALL_MAX = 12
 Q_THRESHOLD_NEAR = 4
+CouponCounts = Tuple[int, ...]
+StateKey = Tuple[int, CouponCounts]
 
 
 @dataclass(frozen=True)
@@ -40,7 +42,7 @@ class Params:
 class ParentInfo:
     prev_items: int
     prev_points: int
-    prev_coupon_key: str
+    prev_coupon_counts: CouponCounts
     qty: int
     order_total: int
     coupon_discount: int
@@ -101,16 +103,6 @@ def normalize_coupons(coupons: Tuple[Coupon, ...]) -> Tuple[Coupon, ...]:
     return tuple(normalized)
 
 
-def coupon_key(counts: Tuple[int, ...]) -> str:
-    return ",".join(str(count) for count in counts)
-
-
-def parse_coupon_key(key: str) -> Tuple[int, ...]:
-    if not key:
-        return ()
-    return tuple(int(part) for part in key.split(","))
-
-
 def eligible(order_total: int, cash_paid: int, params: Params) -> bool:
     if params.threshold_basis == "order_total":
         return order_total >= params.min_order_total_for_points
@@ -155,7 +147,7 @@ def q_candidates(rem_items: int, params: Params) -> List[int]:
 
 def max_future_coupon_discount(
     coupons: Tuple[Coupon, ...],
-    counts: Tuple[int, ...],
+    counts: CouponCounts,
     remaining_items: int,
     unit_price_tax_incl: int,
 ) -> int:
@@ -168,7 +160,7 @@ def max_future_coupon_discount(
     return min(total, remaining_total)
 
 
-def coupon_actions(coupons: Tuple[Coupon, ...], counts: Tuple[int, ...], order_total: int):
+def coupon_actions(coupons: Tuple[Coupon, ...], counts: CouponCounts, order_total: int) -> Iterable[Tuple[CouponCounts, int, Optional[str]]]:
     yield counts, 0, None
     for idx, coupon in enumerate(coupons):
         if counts[idx] <= 0 or order_total < coupon.min_total:
@@ -222,24 +214,6 @@ def candidate_cash_values(
     return sorted(values)
 
 
-def count_orders(items: int, point_balance: int, coupon_state: str, layers: List[Dict[str, Tuple[int, Optional[ParentInfo]]]]) -> int:
-    total = 0
-    current_items = items
-    current_points = point_balance
-    current_coupon_state = coupon_state
-    while True:
-        entry = layers[current_items].get(f"{current_points}|{current_coupon_state}")
-        if entry is None or entry[1] is None:
-            return total
-        total += 1
-        parent = entry[1]
-        current_items = parent.prev_items
-        current_points = parent.prev_points
-        current_coupon_state = parent.prev_coupon_key
-
-
-
-
 def build_purchase_suggestion(base_cash_total: int, target_items: int, params: Params, start_points: int):
     budget = base_cash_total + params.unit_price_tax_incl
     max_coupon_saving = sum(coupon.discount * coupon.count for coupon in params.coupons)
@@ -290,76 +264,92 @@ def solve(n_items: int, params: Params, start_points: int = 0, include_suggestio
     num, den = params.ratio_num_den()
     unit_price = params.unit_price_tax_incl
     start_point_balance = min(max(0, int(start_points)), n_items * unit_price)
-    start_coupon_counts = tuple(coupon.count for coupon in coupons)
-    start_coupon_key = coupon_key(start_coupon_counts)
+    start_coupon_counts: CouponCounts = tuple(coupon.count for coupon in coupons)
     keep_lower_points_on_tie = True
 
-    layers: List[Dict[str, Tuple[int, Optional[ParentInfo]]]] = [dict() for _ in range(n_items + 1)]
-    frontiers: List[Dict[str, Frontier]] = [dict() for _ in range(n_items + 1)]
-    layers[0][f"{start_point_balance}|{start_coupon_key}"] = (0, None)
-    frontiers[0][start_coupon_key] = Frontier()
-    frontiers[0][start_coupon_key].insert(start_point_balance, 0, keep_lower_points_on_tie)
+    q_by_remaining = {rem: q_candidates(rem, params) for rem in range(1, n_items + 1)}
+    future_target_cache: Dict[Tuple[CouponCounts, int], int] = {}
+    cash_candidates_cache: Dict[Tuple[int, int, int, bool, int], List[int]] = {}
+    coupon_action_cache: Dict[Tuple[CouponCounts, int], Tuple[Tuple[CouponCounts, int, Optional[str]], ...]] = {}
+
+    layers: List[Dict[StateKey, Tuple[int, Optional[ParentInfo]]]] = [dict() for _ in range(n_items + 1)]
+    frontiers: List[Dict[CouponCounts, Frontier]] = [dict() for _ in range(n_items + 1)]
+    start_state = (start_point_balance, start_coupon_counts)
+    layers[0][start_state] = (0, None)
+    frontiers[0][start_coupon_counts] = Frontier()
+    frontiers[0][start_coupon_counts].insert(start_point_balance, 0, keep_lower_points_on_tie)
 
     for purchased in range(n_items):
         layer = layers[purchased]
         if not layer:
             continue
 
-        for qty in q_candidates(n_items - purchased, params):
+        for qty in q_by_remaining[n_items - purchased]:
             next_purchased = purchased + qty
             order_total = qty * unit_price
             next_layer = layers[next_purchased]
             is_final_step = next_purchased == n_items
 
-            for state_key, (cost, _) in list(layer.items()):
-                point_balance_str, current_coupon_key = state_key.split("|", 1)
-                point_balance = int(point_balance_str)
-                counts = parse_coupon_key(current_coupon_key)
+            for (point_balance, current_coupon_counts), (cost, _) in layer.items():
+                action_key = (current_coupon_counts, order_total)
+                actions = coupon_action_cache.get(action_key)
+                if actions is None:
+                    actions = tuple(coupon_actions(coupons, current_coupon_counts, order_total))
+                    coupon_action_cache[action_key] = actions
 
-                for next_counts, coupon_discount, coupon_label in coupon_actions(coupons, counts, order_total):
+                for next_counts, coupon_discount, coupon_label in actions:
                     payable_total = max(0, order_total - coupon_discount)
                     remaining_items = n_items - next_purchased
-                    future_target = max(
-                        0,
-                        remaining_items * unit_price - max_future_coupon_discount(coupons, next_counts, remaining_items, unit_price),
-                    )
-                    next_coupon_key = coupon_key(next_counts)
+                    future_key = (next_counts, remaining_items)
+                    future_target = future_target_cache.get(future_key)
+                    if future_target is None:
+                        future_target = max(
+                            0,
+                            remaining_items * unit_price - max_future_coupon_discount(coupons, next_counts, remaining_items, unit_price),
+                        )
+                        future_target_cache[future_key] = future_target
 
-                    for cash_paid in candidate_cash_values(
-                        point_balance,
-                        payable_total,
-                        order_total,
-                        coupon_discount == 0,
-                        future_target,
-                        params,
-                        num,
-                        den,
-                    ):
+                    cash_key = (point_balance, payable_total, order_total, coupon_discount == 0, future_target)
+                    cash_values = cash_candidates_cache.get(cash_key)
+                    if cash_values is None:
+                        cash_values = candidate_cash_values(
+                            point_balance,
+                            payable_total,
+                            order_total,
+                            coupon_discount == 0,
+                            future_target,
+                            params,
+                            num,
+                            den,
+                        )
+                        cash_candidates_cache[cash_key] = cash_values
+
+                    for cash_paid in cash_values:
                         points_used = payable_total - cash_paid
                         if points_used > point_balance:
                             continue
 
                         next_points = point_balance - points_used + points_earned(cash_paid, order_total, params, num, den)
                         next_cost = cost + cash_paid
-                        next_state_key = f"{next_points}|{next_coupon_key}"
+                        next_state = (next_points, next_counts)
 
                         if not is_final_step:
-                            frontier = frontiers[next_purchased].setdefault(next_coupon_key, Frontier())
+                            frontier = frontiers[next_purchased].setdefault(next_counts, Frontier())
                             if frontier.dominated(next_points, next_cost, keep_lower_points_on_tie):
                                 continue
                             if not frontier.insert(next_points, next_cost, keep_lower_points_on_tie):
                                 continue
 
-                        prev = next_layer.get(next_state_key)
+                        prev = next_layer.get(next_state)
                         if prev is not None and prev[0] <= next_cost:
                             continue
 
-                        next_layer[next_state_key] = (
+                        next_layer[next_state] = (
                             next_cost,
                             ParentInfo(
                                 prev_items=purchased,
                                 prev_points=point_balance,
-                                prev_coupon_key=current_coupon_key,
+                                prev_coupon_counts=current_coupon_counts,
                                 qty=qty,
                                 order_total=order_total,
                                 coupon_discount=coupon_discount,
@@ -374,27 +364,19 @@ def solve(n_items: int, params: Params, start_points: int = 0, include_suggestio
         return None
 
     min_cost = min(cost for cost, _ in final_layer.values())
-    finalists = []
-    for state_key, (cost, _) in final_layer.items():
-        if cost != min_cost:
-            continue
-        point_balance_str, coupon_state = state_key.split("|", 1)
-        finalists.append((int(point_balance_str), coupon_state))
-
+    finalists = [state for state, (cost, _) in final_layer.items() if cost == min_cost]
     best_state = min(finalists, key=lambda item: item[0])
 
     steps: List[ParentInfo] = []
     current_items = n_items
-    current_points = best_state[0]
-    current_coupon_state = best_state[1]
+    current_state = best_state
     while True:
-        entry = layers[current_items].get(f"{current_points}|{current_coupon_state}")
+        entry = layers[current_items].get(current_state)
         if entry is None or entry[1] is None:
             break
         steps.append(entry[1])
         current_items = entry[1].prev_items
-        current_points = entry[1].prev_points
-        current_coupon_state = entry[1].prev_coupon_key
+        current_state = (entry[1].prev_points, entry[1].prev_coupon_counts)
     steps.reverse()
 
     point_balance = start_point_balance
