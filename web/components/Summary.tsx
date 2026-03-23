@@ -9,7 +9,7 @@ export default function Summary({ result }: Props) {
   const suggestionText = summary.suggestion
     ? summary.suggestion.additionalCash > 0
       ? `あと${summary.suggestion.additionalCash.toLocaleString()}円足すと${summary.suggestion.extraItems}枚多く買えます（計${summary.suggestion.targetItems.toLocaleString()}枚）`
-      : `SC残高${summary.leftoverPoints.toLocaleString()}円、追加なしで${summary.suggestion.extraItems}枚多く買えます（計${summary.suggestion.targetItems.toLocaleString()}枚）`
+      : `追加なしで${summary.suggestion.extraItems}枚多く買えます（計${summary.suggestion.targetItems.toLocaleString()}枚）`
     : null;
   const effectiveDiscountRate =
     summary.grossTotal > 0
