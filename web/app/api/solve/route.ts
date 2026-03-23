@@ -61,7 +61,10 @@ export async function POST(req: NextRequest) {
 
   const result = solve(n, params, normalizedStartPoints);
   if (result === null) {
-    return NextResponse.json({ error: "計算に失敗しました。" }, { status: 503 });
+    return NextResponse.json(
+      { error: "計算がタイムアウトしました。クーポン条件を整理するか、入力値を小さくして再度お試しください。" },
+      { status: 503 }
+    );
   }
 
   return NextResponse.json(result);

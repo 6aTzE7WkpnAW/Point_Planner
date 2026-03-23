@@ -3,7 +3,7 @@ import type { Coupon, OrderRow, Params, SolveResult } from "@/types";
 const Q_TAIL_WINDOW = 12;
 const Q_SMALL_MAX = 12;
 const Q_THRESHOLD_NEAR = 4;
-const TIME_LIMIT_MS = 8000;
+const TIME_LIMIT_MS = 15000;
 
 type CouponAction = {
   nextCounts: number[];
@@ -59,7 +59,7 @@ function ratioNumDen(pointRate: number, taxRate: number): [number, number] {
 }
 
 function normalizeCoupons(coupons?: Coupon[]): Coupon[] {
-  return (coupons ?? [])
+  const normalized = (coupons ?? [])
     .map((coupon) => ({
       minTotal: Math.max(0, Math.floor(coupon.minTotal)),
       discount: Math.max(0, Math.floor(coupon.discount)),
@@ -67,6 +67,22 @@ function normalizeCoupons(coupons?: Coupon[]): Coupon[] {
     }))
     .filter((coupon) => coupon.discount > 0 && coupon.count > 0)
     .sort((a, b) => (a.minTotal - b.minTotal) || (a.discount - b.discount));
+
+  if (normalized.length <= 1) {
+    return normalized;
+  }
+
+  const merged: Coupon[] = [];
+  for (const coupon of normalized) {
+    const lastCoupon = merged[merged.length - 1];
+    if (lastCoupon && lastCoupon.minTotal === coupon.minTotal && lastCoupon.discount === coupon.discount) {
+      lastCoupon.count += coupon.count;
+      continue;
+    }
+    merged.push({ ...coupon });
+  }
+
+  return merged;
 }
 
 function couponKey(counts: number[]): string {
@@ -76,6 +92,15 @@ function couponKey(counts: number[]): string {
 function parseCouponKey(key: string): number[] {
   if (!key) return [];
   return key.split(",").map((value) => parseInt(value, 10));
+}
+
+function couponCountsDominate(lhs: number[], rhs: number[]): boolean {
+  for (let index = 0; index < lhs.length; index += 1) {
+    if (lhs[index] < rhs[index]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function isEligible(orderTotal: number, cashPaid: number, params: Params): boolean {
@@ -246,18 +271,30 @@ function maxFutureCouponDiscount(
     return 0;
   }
 
-  const remainingGross = remainingItems * unitPriceTaxIn;
-  let total = 0;
+  const bestByItems = new Array<number>(remainingItems + 1).fill(0);
+
   for (let index = 0; index < coupons.length; index += 1) {
-    if (counts[index] <= 0) {
+    const availableCount = counts[index];
+    if (availableCount <= 0) {
       continue;
     }
-    if (coupons[index].minTotal > remainingGross) {
+
+    const minItemsNeeded = Math.max(1, Math.ceil(coupons[index].minTotal / unitPriceTaxIn));
+    if (minItemsNeeded > remainingItems) {
       continue;
     }
-    total += coupons[index].discount * counts[index];
+
+    for (let used = 0; used < availableCount; used += 1) {
+      for (let items = remainingItems; items >= minItemsNeeded; items -= 1) {
+        bestByItems[items] = Math.max(
+          bestByItems[items],
+          bestByItems[items - minItemsNeeded] + coupons[index].discount
+        );
+      }
+    }
   }
-  return Math.min(total, remainingGross);
+
+  return bestByItems[remainingItems];
 }
 
 function couponActions(coupons: Coupon[], counts: number[], orderTotal: number): CouponAction[] {
@@ -312,6 +349,27 @@ function getCouponActionsForState(
     ...action,
     nextState: getCouponStateData(couponKey(action.nextCounts), couponStateCache),
   }));
+}
+
+function isDominatedAcrossCouponStates(
+  nextFrontiers: Map<string, Frontier>,
+  candidateState: CouponStateData,
+  pointBalance: number,
+  cost: number,
+  keepLowerPointsOnTie: boolean,
+  couponStateCache: Map<string, CouponStateData>
+): boolean {
+  for (const [otherCouponKey, frontier] of nextFrontiers) {
+    const otherState = getCouponStateData(otherCouponKey, couponStateCache);
+    if (!couponCountsDominate(otherState.counts, candidateState.counts)) {
+      continue;
+    }
+    if (frontier.dominated(pointBalance, cost, keepLowerPointsOnTie)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function candidateCashValues(
@@ -556,11 +614,11 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
   frontiers[0].set(startCouponKey, new Frontier());
   frontiers[0].get(startCouponKey)?.insert(startPointBalance, 0, keepLowerPointsOnTie);
 
-  let isExact = true;
+  let didTimeout = false;
 
   for (let purchased = 0; purchased < n; purchased += 1) {
     if (Date.now() - startedAt > TIME_LIMIT_MS) {
-      isExact = false;
+      didTimeout = true;
       break;
     }
 
@@ -665,6 +723,19 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
               }
 
               if (!isFinalStep) {
+                if (
+                  isDominatedAcrossCouponStates(
+                    nextFrontiers,
+                    action.nextState,
+                    nextPointBalance,
+                    nextCost,
+                    keepLowerPointsOnTie,
+                    couponStateCache
+                  )
+                ) {
+                  continue;
+                }
+
                 let frontier = nextFrontiers.get(nextCouponKey);
                 if (!frontier) {
                   frontier = new Frontier();
@@ -710,7 +781,7 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
   }
 
   const finalLayer = layers[n];
-  if (finalLayer.size === 0) {
+  if (didTimeout || finalLayer.size === 0) {
     return null;
   }
 
@@ -803,7 +874,7 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
     },
     orders,
     meta: {
-      exact: isExact,
+      exact: true,
       timeMs: Date.now() - startedAt,
     },
   };

@@ -67,7 +67,10 @@ export async function POST(req: NextRequest) {
 
   const oneItemResult = solve(1, params, normalizedStartPoints);
   if (oneItemResult === null) {
-    return NextResponse.json({ error: "計算に失敗しました。" }, { status: 503 });
+    return NextResponse.json(
+      { error: "計算がタイムアウトしました。クーポン条件を整理するか、入力値を小さくして再度お試しください。" },
+      { status: 503 }
+    );
   }
   if (oneItemResult.summary.cashTotal > budget) {
     return NextResponse.json({ error: "この予算では1枚も購入できません。" }, { status: 400 });
