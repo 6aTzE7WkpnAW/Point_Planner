@@ -28,6 +28,12 @@ type LayerEntry = {
   parent: ParentInfo | null;
 };
 
+type CouponStateData = {
+  counts: number[];
+  key: string;
+  actionsByOrderTotal: Map<number, CouponAction[]>;
+};
+
 function gcd(a: number, b: number): number {
   while (b !== 0) {
     [a, b] = [b, a % b];
@@ -185,6 +191,42 @@ function qCandidates(remItems: number, params: Params): number[] {
   return result.sort((a, b) => a - b);
 }
 
+function greedyUpperBound(
+  totalItems: number,
+  startPoints: number,
+  startCouponCounts: number[],
+  unitPrice: number,
+  coupons: Coupon[]
+): number {
+  const orderTotal = totalItems * unitPrice;
+  let bestCouponDiscount = 0;
+
+  for (let index = 0; index < coupons.length; index += 1) {
+    if (startCouponCounts[index] <= 0 || orderTotal < coupons[index].minTotal) {
+      continue;
+    }
+    bestCouponDiscount = Math.max(bestCouponDiscount, Math.min(coupons[index].discount, orderTotal));
+  }
+
+  const payableWithCoupon = orderTotal - bestCouponDiscount;
+  let bestCash = payableWithCoupon;
+
+  if (bestCouponDiscount === 0) {
+    bestCash = Math.min(bestCash, Math.max(0, orderTotal - startPoints));
+  }
+
+  return bestCash;
+}
+
+function optimisticRemainingCashLowerBound(
+  remainingItems: number,
+  pointBalance: number,
+  futureCouponDiscount: number,
+  unitPrice: number
+): number {
+  return Math.max(0, remainingItems * unitPrice - pointBalance - futureCouponDiscount);
+}
+
 function maxFutureCouponDiscount(
   coupons: Coupon[],
   counts: number[],
@@ -227,6 +269,40 @@ function couponActions(coupons: Coupon[], counts: number[], orderTotal: number):
   }
 
   return actions;
+}
+
+function getCouponStateData(
+  key: string,
+  couponStateCache: Map<string, CouponStateData>
+): CouponStateData {
+  let state = couponStateCache.get(key);
+  if (!state) {
+    state = {
+      counts: parseCouponKey(key),
+      key,
+      actionsByOrderTotal: new Map<number, CouponAction[]>(),
+    };
+    couponStateCache.set(key, state);
+  }
+  return state;
+}
+
+function getCouponActionsForState(
+  coupons: Coupon[],
+  state: CouponStateData,
+  orderTotal: number,
+  couponStateCache: Map<string, CouponStateData>
+): Array<CouponAction & { nextState: CouponStateData }> {
+  let actions = state.actionsByOrderTotal.get(orderTotal);
+  if (!actions) {
+    actions = couponActions(coupons, state.counts, orderTotal);
+    state.actionsByOrderTotal.set(orderTotal, actions);
+  }
+
+  return actions.map((action) => ({
+    ...action,
+    nextState: getCouponStateData(couponKey(action.nextCounts), couponStateCache),
+  }));
 }
 
 function candidateCashValues(
@@ -292,7 +368,7 @@ function countOrders(
   items: number,
   pointBalance: number,
   couponState: string,
-  layers: Map<string, LayerEntry>[]
+  layers: Map<string, Map<number, LayerEntry>>[]
 ): number {
   let total = 0;
   let currentItems = items;
@@ -300,7 +376,7 @@ function countOrders(
   let currentCouponState = couponState;
 
   while (true) {
-    const entry = layers[currentItems].get(`${currentPointBalance}|${currentCouponState}`);
+    const entry = layers[currentItems].get(currentCouponState)?.get(currentPointBalance);
     if (!entry?.parent) {
       return total;
     }
@@ -381,11 +457,15 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
   const startPointBalance = Math.min(Math.max(0, Math.floor(startPoints)), n * unitPrice);
   const startCouponCounts = coupons.map((coupon) => coupon.count);
   const startCouponKey = couponKey(startCouponCounts);
+  const couponStateCache = new Map<string, CouponStateData>();
+  const futureDiscountCache = new Map<string, number>();
+  const cashCandidateCache = new Map<string, number[]>();
   const keepLowerPointsOnTie = params.objective === "min_cash_then_min_leftover";
+  let bestKnownCost = greedyUpperBound(n, startPointBalance, startCouponCounts, unitPrice, coupons);
 
-  const layers: Map<string, LayerEntry>[] = Array.from({ length: n + 1 }, () => new Map());
+  const layers: Map<string, Map<number, LayerEntry>>[] = Array.from({ length: n + 1 }, () => new Map());
   const frontiers: Map<string, Frontier>[] = Array.from({ length: n + 1 }, () => new Map());
-  layers[0].set(`${startPointBalance}|${startCouponKey}`, { cost: 0, parent: null });
+  layers[0].set(startCouponKey, new Map([[startPointBalance, { cost: 0, parent: null }]]));
   frontiers[0].set(startCouponKey, new Frontier());
   frontiers[0].get(startCouponKey)?.insert(startPointBalance, 0, keepLowerPointsOnTie);
 
@@ -403,85 +483,139 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
     }
 
     const quantities = qCandidates(n - purchased, params);
-    for (const qty of quantities) {
+    for (let quantityIndex = quantities.length - 1; quantityIndex >= 0; quantityIndex -= 1) {
+      const qty = quantities[quantityIndex];
       const nextPurchased = purchased + qty;
       const orderTotal = qty * unitPrice;
       const isFinalStep = nextPurchased === n;
       const nextLayer = layers[nextPurchased];
       const nextFrontiers = frontiers[nextPurchased];
 
-      for (const [stateKey, entry] of currentLayer) {
-        const separator = stateKey.indexOf("|");
-        const pointBalance = parseInt(stateKey.slice(0, separator), 10);
-        const currentCouponKey = stateKey.slice(separator + 1);
-        const counts = parseCouponKey(currentCouponKey);
-
-        for (const action of couponActions(coupons, counts, orderTotal)) {
-          const payableTotal = Math.max(0, orderTotal - action.discount);
-          const remainingItems = n - nextPurchased;
-          const futureCouponDiscount = maxFutureCouponDiscount(
+      for (const [currentCouponKey, pointEntries] of currentLayer) {
+        const currentCouponState = getCouponStateData(currentCouponKey, couponStateCache);
+        const currentRemainingItems = n - purchased;
+        const currentFutureDiscountKey = `${currentRemainingItems}|${currentCouponState.key}`;
+        let currentFutureCouponDiscount = futureDiscountCache.get(currentFutureDiscountKey);
+        if (currentFutureCouponDiscount === undefined) {
+          currentFutureCouponDiscount = maxFutureCouponDiscount(
             coupons,
-            action.nextCounts,
-            remainingItems,
+            currentCouponState.counts,
+            currentRemainingItems,
             unitPrice
           );
-          const futureTarget = Math.max(0, remainingItems * unitPrice - futureCouponDiscount);
-          const nextCouponKey = couponKey(action.nextCounts);
-          const cashValues = candidateCashValues(
-            pointBalance,
-            payableTotal,
-            orderTotal,
-            action.discount === 0,
-            futureTarget,
-            params,
-            num,
-            den
-          );
+          futureDiscountCache.set(currentFutureDiscountKey, currentFutureCouponDiscount);
+        }
+        for (const [pointBalance, entry] of pointEntries) {
+          const currentLowerBound =
+            entry.cost
+            + optimisticRemainingCashLowerBound(
+              currentRemainingItems,
+              pointBalance,
+              currentFutureCouponDiscount,
+              unitPrice
+            );
 
-          for (const cashPaid of cashValues) {
-            const pointsUsed = payableTotal - cashPaid;
-            if (pointsUsed > pointBalance) {
-              continue;
+          if (currentLowerBound > bestKnownCost) {
+            continue;
+          }
+
+          for (const action of getCouponActionsForState(coupons, currentCouponState, orderTotal, couponStateCache)) {
+            const payableTotal = Math.max(0, orderTotal - action.discount);
+            const remainingItems = n - nextPurchased;
+            const futureDiscountKey = `${remainingItems}|${action.nextState.key}`;
+            let futureCouponDiscount = futureDiscountCache.get(futureDiscountKey);
+            if (futureCouponDiscount === undefined) {
+              futureCouponDiscount = maxFutureCouponDiscount(
+                coupons,
+                action.nextState.counts,
+                remainingItems,
+                unitPrice
+              );
+              futureDiscountCache.set(futureDiscountKey, futureCouponDiscount);
             }
-
-            const earned = calcPointsEarned(cashPaid, orderTotal, params, num, den);
-            const nextPointBalance = pointBalance - pointsUsed + earned;
-            const nextCost = entry.cost + cashPaid;
-            const nextStateKey = `${nextPointBalance}|${nextCouponKey}`;
-
-            if (!isFinalStep) {
-              let frontier = nextFrontiers.get(nextCouponKey);
-              if (!frontier) {
-                frontier = new Frontier();
-                nextFrontiers.set(nextCouponKey, frontier);
-              }
-              if (frontier.dominated(nextPointBalance, nextCost, keepLowerPointsOnTie)) {
-                continue;
-              }
-              if (!frontier.insert(nextPointBalance, nextCost, keepLowerPointsOnTie)) {
-                continue;
-              }
-            }
-
-            const currentBest = nextLayer.get(nextStateKey);
-            if (currentBest && currentBest.cost <= nextCost) {
-              continue;
-            }
-
-            nextLayer.set(nextStateKey, {
-              cost: nextCost,
-              parent: {
-                prevItems: purchased,
-                prevPoints: pointBalance,
-                prevCouponKey: currentCouponKey,
-                qty,
+            const futureTarget = Math.max(0, remainingItems * unitPrice - futureCouponDiscount);
+            const nextCouponKey = action.nextState.key;
+            const cashCandidateKey = [
+              pointBalance,
+              payableTotal,
+              orderTotal,
+              action.discount === 0 ? 1 : 0,
+              futureTarget,
+            ].join("|");
+            let cashValues = cashCandidateCache.get(cashCandidateKey);
+            if (!cashValues) {
+              cashValues = candidateCashValues(
+                pointBalance,
+                payableTotal,
                 orderTotal,
-                couponDiscount: action.discount,
-                couponApplied: action.label,
-                pointsUsed,
-                cashPaid,
-              },
-            });
+                action.discount === 0,
+                futureTarget,
+                params,
+                num,
+                den
+              );
+              cashCandidateCache.set(cashCandidateKey, cashValues);
+            }
+
+            for (const cashPaid of cashValues) {
+              const pointsUsed = payableTotal - cashPaid;
+              if (pointsUsed > pointBalance) {
+                continue;
+              }
+
+              const earned = calcPointsEarned(cashPaid, orderTotal, params, num, den);
+              const nextPointBalance = pointBalance - pointsUsed + earned;
+              const nextCost = entry.cost + cashPaid;
+              const lowerBound =
+                nextCost + optimisticRemainingCashLowerBound(remainingItems, nextPointBalance, futureCouponDiscount, unitPrice);
+
+              if (lowerBound > bestKnownCost) {
+                continue;
+              }
+
+              if (isFinalStep && nextCost < bestKnownCost) {
+                bestKnownCost = nextCost;
+              }
+
+              if (!isFinalStep) {
+                let frontier = nextFrontiers.get(nextCouponKey);
+                if (!frontier) {
+                  frontier = new Frontier();
+                  nextFrontiers.set(nextCouponKey, frontier);
+                }
+                if (frontier.dominated(nextPointBalance, nextCost, keepLowerPointsOnTie)) {
+                  continue;
+                }
+                if (!frontier.insert(nextPointBalance, nextCost, keepLowerPointsOnTie)) {
+                  continue;
+                }
+              }
+
+              let couponLayer = nextLayer.get(nextCouponKey);
+              if (!couponLayer) {
+                couponLayer = new Map<number, LayerEntry>();
+                nextLayer.set(nextCouponKey, couponLayer);
+              }
+              const currentBest = couponLayer.get(nextPointBalance);
+              if (currentBest && currentBest.cost <= nextCost) {
+                continue;
+              }
+
+              couponLayer.set(nextPointBalance, {
+                cost: nextCost,
+                parent: {
+                  prevItems: purchased,
+                  prevPoints: pointBalance,
+                  prevCouponKey: currentCouponKey,
+                  qty,
+                  orderTotal,
+                  couponDiscount: action.discount,
+                  couponApplied: action.label,
+                  pointsUsed,
+                  cashPaid,
+                },
+              });
+            }
           }
         }
       }
@@ -494,20 +628,20 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
   }
 
   let minCost = Number.POSITIVE_INFINITY;
-  for (const entry of finalLayer.values()) {
-    minCost = Math.min(minCost, entry.cost);
+  for (const pointEntries of finalLayer.values()) {
+    for (const entry of pointEntries.values()) {
+      minCost = Math.min(minCost, entry.cost);
+    }
   }
 
   const finalStates: Array<{ pointBalance: number; couponState: string }> = [];
-  for (const [stateKey, entry] of finalLayer) {
-    if (entry.cost !== minCost) {
-      continue;
+  for (const [couponState, pointEntries] of finalLayer) {
+    for (const [pointBalance, entry] of pointEntries) {
+      if (entry.cost !== minCost) {
+        continue;
+      }
+      finalStates.push({ pointBalance, couponState });
     }
-    const separator = stateKey.indexOf("|");
-    finalStates.push({
-      pointBalance: parseInt(stateKey.slice(0, separator), 10),
-      couponState: stateKey.slice(separator + 1),
-    });
   }
 
   let chosen = finalStates[0];
@@ -533,7 +667,7 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
   let currentPointBalance = chosen.pointBalance;
   let currentCouponState = chosen.couponState;
   while (true) {
-    const entry = layers[currentItems].get(`${currentPointBalance}|${currentCouponState}`);
+    const entry = layers[currentItems].get(currentCouponState)?.get(currentPointBalance);
     if (!entry?.parent) {
       break;
     }
