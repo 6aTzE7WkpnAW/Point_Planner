@@ -37,10 +37,12 @@ type MergedOrderGroup = {
   pointsEarned: number;
 };
 
+type EnrichedCouponAction = CouponAction & { nextState: CouponStateData };
+
 type CouponStateData = {
   counts: number[];
   key: string;
-  actionsByOrderTotal: Map<number, CouponAction[]>;
+  enrichedActionsByOrderTotal: Map<number, EnrichedCouponAction[]>;
 };
 
 function gcd(a: number, b: number): number {
@@ -101,6 +103,30 @@ function couponCountsDominate(lhs: number[], rhs: number[]): boolean {
     }
   }
   return true;
+}
+
+function normalizeCouponCounts(
+  counts: number[],
+  coupons: Coupon[],
+  remainingItems: number,
+  unitPrice: number
+): number[] {
+  const maxOrderTotal = remainingItems * unitPrice;
+  let needsCopy = false;
+  for (let i = 0; i < coupons.length; i += 1) {
+    if (counts[i] > 0 && coupons[i].minTotal > maxOrderTotal) {
+      needsCopy = true;
+      break;
+    }
+  }
+  if (!needsCopy) return counts;
+  const result = counts.slice();
+  for (let i = 0; i < coupons.length; i += 1) {
+    if (coupons[i].minTotal > maxOrderTotal) {
+      result[i] = 0;
+    }
+  }
+  return result;
 }
 
 function isEligible(orderTotal: number, cashPaid: number, params: Params): boolean {
@@ -337,7 +363,7 @@ function getCouponStateData(
     state = {
       counts: parseCouponKey(key),
       key,
-      actionsByOrderTotal: new Map<number, CouponAction[]>(),
+      enrichedActionsByOrderTotal: new Map<number, EnrichedCouponAction[]>(),
     };
     couponStateCache.set(key, state);
   }
@@ -349,28 +375,30 @@ function getCouponActionsForState(
   state: CouponStateData,
   orderTotal: number,
   couponStateCache: Map<string, CouponStateData>
-): Array<CouponAction & { nextState: CouponStateData }> {
-  let actions = state.actionsByOrderTotal.get(orderTotal);
-  if (!actions) {
-    actions = couponActions(coupons, state.counts, orderTotal);
-    state.actionsByOrderTotal.set(orderTotal, actions);
+): EnrichedCouponAction[] {
+  let enriched = state.enrichedActionsByOrderTotal.get(orderTotal);
+  if (!enriched) {
+    const actions = couponActions(coupons, state.counts, orderTotal);
+    enriched = actions.map((action) => ({
+      ...action,
+      nextState: getCouponStateData(couponKey(action.nextCounts), couponStateCache),
+    }));
+    state.enrichedActionsByOrderTotal.set(orderTotal, enriched);
   }
-
-  return actions.map((action) => ({
-    ...action,
-    nextState: getCouponStateData(couponKey(action.nextCounts), couponStateCache),
-  }));
+  return enriched;
 }
 
 function isDominatedAcrossCouponStates(
   nextFrontiers: Map<string, Frontier>,
   candidateState: CouponStateData,
+  skipKey: string,
   pointBalance: number,
   cost: number,
   keepLowerPointsOnTie: boolean,
   couponStateCache: Map<string, CouponStateData>
 ): boolean {
   for (const [otherCouponKey, frontier] of nextFrontiers) {
+    if (otherCouponKey === skipKey) continue;
     const otherState = getCouponStateData(otherCouponKey, couponStateCache);
     if (!couponCountsDominate(otherState.counts, candidateState.counts)) {
       continue;
@@ -611,7 +639,10 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
   const [num, den] = ratioNumDen(params.pointRate, params.taxRate);
   const unitPrice = params.unitPriceTaxIn;
   const startPointBalance = Math.min(Math.max(0, Math.floor(startPoints)), n * unitPrice);
-  const startCouponCounts = coupons.map((coupon) => coupon.count);
+  const startCouponCounts = normalizeCouponCounts(
+    coupons.map((coupon) => coupon.count),
+    coupons, n, unitPrice
+  );
   const startCouponKey = couponKey(startCouponCounts);
   const couponStateCache = new Map<string, CouponStateData>();
   const futureDiscountCache = new Map<string, number>();
@@ -678,19 +709,20 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
           for (const action of getCouponActionsForState(coupons, currentCouponState, orderTotal, couponStateCache)) {
             const payableTotal = Math.max(0, orderTotal - action.discount);
             const remainingItems = n - nextPurchased;
-            const futureDiscountKey = `${remainingItems}|${action.nextState.key}`;
+            const normalizedCounts = normalizeCouponCounts(action.nextState.counts, coupons, remainingItems, unitPrice);
+            const nextCouponKey = couponKey(normalizedCounts);
+            const futureDiscountKey = `${remainingItems}|${nextCouponKey}`;
             let futureCouponDiscount = futureDiscountCache.get(futureDiscountKey);
             if (futureCouponDiscount === undefined) {
               futureCouponDiscount = maxFutureCouponDiscount(
                 coupons,
-                action.nextState.counts,
+                normalizedCounts,
                 remainingItems,
                 unitPrice
               );
               futureDiscountCache.set(futureDiscountKey, futureCouponDiscount);
             }
             const futureTarget = Math.max(0, remainingItems * unitPrice - futureCouponDiscount);
-            const nextCouponKey = action.nextState.key;
             const cashCandidateKey = [
               pointBalance,
               payableTotal,
@@ -734,10 +766,17 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
               }
 
               if (!isFinalStep) {
+                let frontier = nextFrontiers.get(nextCouponKey);
+                if (frontier && frontier.dominated(nextPointBalance, nextCost, keepLowerPointsOnTie)) {
+                  continue;
+                }
+
+                const normalizedNextState = getCouponStateData(nextCouponKey, couponStateCache);
                 if (
                   isDominatedAcrossCouponStates(
                     nextFrontiers,
-                    action.nextState,
+                    normalizedNextState,
+                    nextCouponKey,
                     nextPointBalance,
                     nextCost,
                     keepLowerPointsOnTie,
@@ -747,13 +786,9 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
                   continue;
                 }
 
-                let frontier = nextFrontiers.get(nextCouponKey);
                 if (!frontier) {
                   frontier = new Frontier();
                   nextFrontiers.set(nextCouponKey, frontier);
-                }
-                if (frontier.dominated(nextPointBalance, nextCost, keepLowerPointsOnTie)) {
-                  continue;
                 }
                 if (!frontier.insert(nextPointBalance, nextCost, keepLowerPointsOnTie)) {
                   continue;
