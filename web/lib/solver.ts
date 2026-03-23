@@ -311,7 +311,65 @@ function countOrders(
   }
 }
 
-export function solve(n: number, params: Params, startPoints = 0): SolveResult | null {
+
+function buildPurchaseSuggestion(
+  baseCashTotal: number,
+  targetItems: number,
+  params: Params,
+  startPoints: number
+) {
+  const budget = baseCashTotal + params.unitPriceTaxIn;
+  const coupons = params.coupons ?? [];
+  const maxCouponSaving = coupons.reduce((sum, coupon) => sum + coupon.discount * coupon.count, 0);
+  const taxExclusiveRatio = 1 / (1 + params.taxRate);
+  const minEffectivePrice = params.unitPriceTaxIn * Math.max(0.01, 1 - params.pointRate * taxExclusiveRatio);
+  const maxPossibleItems = Math.min(
+    500,
+    Math.max(
+      targetItems + 1,
+      Math.ceil((budget + startPoints + maxCouponSaving) / Math.max(1, minEffectivePrice)) + 5
+    )
+  );
+
+  let low = targetItems + 1;
+  let high = maxPossibleItems;
+  let bestResult: SolveResult | null = null;
+  let bestTargetItems = targetItems;
+
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const candidate = solve(mid, params, startPoints, false);
+    if (candidate === null) {
+      high = mid - 1;
+      continue;
+    }
+
+    if (candidate.summary.cashTotal <= budget) {
+      bestResult = candidate;
+      bestTargetItems = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  if (!bestResult || bestTargetItems <= targetItems) {
+    return null;
+  }
+
+  const additionalCash = bestResult.summary.cashTotal - baseCashTotal;
+  if (additionalCash <= 0 || additionalCash > params.unitPriceTaxIn) {
+    return null;
+  }
+
+  return {
+    additionalCash,
+    targetItems: bestTargetItems,
+    extraItems: bestTargetItems - targetItems,
+  };
+}
+
+export function solve(n: number, params: Params, startPoints = 0, includeSuggestion = true): SolveResult | null {
   const startedAt = Date.now();
   const coupons = normalizeCoupons(params.coupons);
   const [num, den] = ratioNumDen(params.pointRate, params.taxRate);
@@ -515,6 +573,7 @@ export function solve(n: number, params: Params, startPoints = 0): SolveResult |
       leftoverPoints: pointBalance,
       grossTotal: n * unitPrice,
       couponDiscountTotal,
+      suggestion: includeSuggestion ? buildPurchaseSuggestion(cashTotal, n, params, startPoints) : null,
     },
     orders,
     meta: {
