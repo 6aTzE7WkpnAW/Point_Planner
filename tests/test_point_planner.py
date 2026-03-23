@@ -89,3 +89,30 @@ def test_solver_matches_bruteforce_for_cash_threshold_case():
     assert result is not None
     assert result["cash_total"] == expected["cash_total"]
     assert result["leftover_points"] == expected["leftover_points"]
+
+
+
+def test_solver_matches_bruteforce_with_seven_coupon_thresholds():
+    params = Params(
+        unit_price_tax_incl=100,
+        tax_rate_pct=10,
+        point_rate_pct=20,
+        min_order_total_for_points=300,
+        threshold_basis="order_total",
+        coupons=(
+            Coupon(100, 5, 1),
+            Coupon(200, 9, 1),
+            Coupon(300, 13, 1),
+            Coupon(400, 17, 1),
+            Coupon(500, 21, 1),
+            Coupon(600, 25, 1),
+            Coupon(700, 30, 1),
+        ),
+    )
+
+    result = solve(7, params, 120, include_suggestion=False)
+    expected = brute_force_solve(7, params, 120)
+
+    assert result is not None
+    assert result["cash_total"] == expected["cash_total"]
+    assert result["leftover_points"] == expected["leftover_points"]
