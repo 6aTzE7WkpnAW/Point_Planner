@@ -316,8 +316,12 @@ function buildPurchaseSuggestion(
   baseCashTotal: number,
   targetItems: number,
   params: Params,
-  startPoints: number
+  startPoints: number,
+  leftoverPoints: number
 ) {
+  if (leftoverPoints <= 0) {
+    return null;
+  }
   const budget = baseCashTotal + params.unitPriceTaxIn;
   const coupons = params.coupons ?? [];
   const maxCouponSaving = coupons.reduce((sum, coupon) => sum + coupon.discount * coupon.count, 0);
@@ -357,8 +361,8 @@ function buildPurchaseSuggestion(
     return null;
   }
 
-  const additionalCash = bestResult.summary.cashTotal - baseCashTotal;
-  if (additionalCash <= 0 || additionalCash > params.unitPriceTaxIn) {
+  const additionalCash = Math.max(0, bestResult.summary.cashTotal - baseCashTotal);
+  if (additionalCash > params.unitPriceTaxIn) {
     return null;
   }
 
@@ -573,7 +577,7 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
       leftoverPoints: pointBalance,
       grossTotal: n * unitPrice,
       couponDiscountTotal,
-      suggestion: includeSuggestion ? buildPurchaseSuggestion(cashTotal, n, params, startPoints) : null,
+      suggestion: includeSuggestion ? buildPurchaseSuggestion(cashTotal, n, params, startPoints, pointBalance) : null,
     },
     orders,
     meta: {
