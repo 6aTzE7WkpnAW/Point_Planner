@@ -142,10 +142,10 @@ def q_candidates(rem_items: int, params: Params) -> List[int]:
     for coupon in params.coupons:
         if coupon.min_total > 0 and coupon.discount > 0 and coupon.count > 0:
             coupon_threshold_qty = (coupon.min_total + params.unit_price_tax_incl - 1) // params.unit_price_tax_incl
-            for delta in range(-Q_THRESHOLD_NEAR, Q_THRESHOLD_NEAR + 1):
-                qty = coupon_threshold_qty + delta
-                if 1 <= qty <= rem_items:
-                    candidates.add(qty)
+            for qty_val in [coupon_threshold_qty, coupon_threshold_qty - 1,
+                            rem_items - coupon_threshold_qty, rem_items - coupon_threshold_qty + 1]:
+                if 1 <= qty_val <= rem_items:
+                    candidates.add(qty_val)
     for offset in range(0, min(Q_TAIL_WINDOW, rem_items - 1) + 1):
         candidates.add(rem_items - offset)
     candidates.add(rem_items)

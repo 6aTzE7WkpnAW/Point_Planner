@@ -4,6 +4,34 @@ const Q_TAIL_WINDOW = 12;
 const Q_SMALL_MAX = 12;
 const Q_THRESHOLD_NEAR = 4;
 const TIME_LIMIT_MS = 15000;
+const MAX_COUPON_ACTIONS = 4;
+
+type SolveLimits = {
+  maxFrontierSize: number;
+  maxCouponStates: number;
+  smallMax: number;
+  tailWindow: number;
+};
+
+function computeLimits(n: number, numCoupons: number): SolveLimits {
+  if (numCoupons <= 2) {
+    return { maxFrontierSize: Infinity, maxCouponStates: Infinity, smallMax: Q_SMALL_MAX, tailWindow: Q_TAIL_WINDOW };
+  }
+  const complexity = n * numCoupons;
+  if (complexity <= 200) {
+    return { maxFrontierSize: 100, maxCouponStates: 32, smallMax: Q_SMALL_MAX, tailWindow: Q_TAIL_WINDOW };
+  }
+  if (complexity <= 400) {
+    return { maxFrontierSize: 40, maxCouponStates: 20, smallMax: Q_SMALL_MAX, tailWindow: Q_TAIL_WINDOW };
+  }
+  if (complexity <= 700) {
+    return { maxFrontierSize: 20, maxCouponStates: 12, smallMax: 8, tailWindow: 8 };
+  }
+  if (complexity <= 1000) {
+    return { maxFrontierSize: 12, maxCouponStates: 8, smallMax: 6, tailWindow: 6 };
+  }
+  return { maxFrontierSize: 8, maxCouponStates: 6, smallMax: 4, tailWindow: 4 };
+}
 
 type CouponAction = {
   nextCounts: number[];
@@ -168,8 +196,17 @@ function endPoints(
 class Frontier {
   private points: number[] = [];
   private costs: number[] = [];
+  private costCap = Number.POSITIVE_INFINITY;
+  private maxSize: number;
+
+  constructor(maxSize = Infinity) {
+    this.maxSize = maxSize;
+  }
 
   dominated(pointBalance: number, cost: number, keepLowerPointsOnTie: boolean): boolean {
+    if (cost >= this.costCap) {
+      return true;
+    }
     const idx = lowerBound(this.points, pointBalance);
     if (idx < this.points.length && this.points[idx] === pointBalance) {
       return this.costs[idx] <= cost;
@@ -181,6 +218,9 @@ class Frontier {
   }
 
   insert(pointBalance: number, cost: number, keepLowerPointsOnTie: boolean): boolean {
+    if (cost >= this.costCap) {
+      return false;
+    }
     const idx = lowerBound(this.points, pointBalance);
     if (idx < this.points.length && this.points[idx] === pointBalance) {
       if (this.costs[idx] <= cost) {
@@ -207,7 +247,13 @@ class Frontier {
       this.costs.splice(i - 1, 1);
       i -= 1;
     }
-    return true;
+
+    if (this.points.length > this.maxSize) {
+      this.costCap = this.costs[this.maxSize - 1];
+      this.points.length = this.maxSize;
+      this.costs.length = this.maxSize;
+    }
+    return i < this.points.length;
   }
 }
 
@@ -225,8 +271,10 @@ function lowerBound(values: number[], target: number): number {
   return lo;
 }
 
-function qCandidates(remItems: number, params: Params): number[] {
+function qCandidates(remItems: number, params: Params, solveLimits?: SolveLimits): number[] {
   const thresholdQty = Math.ceil(params.minEligibleTotal / params.unitPriceTaxIn);
+  const smallMax = solveLimits?.smallMax ?? Q_SMALL_MAX;
+  const tailWindow = solveLimits?.tailWindow ?? Q_TAIL_WINDOW;
   const seen = new Uint8Array(remItems + 1);
   const result: number[] = [];
 
@@ -237,7 +285,7 @@ function qCandidates(remItems: number, params: Params): number[] {
     }
   };
 
-  for (let qty = 1; qty <= Math.min(remItems, Q_SMALL_MAX); qty += 1) {
+  for (let qty = 1; qty <= Math.min(remItems, smallMax); qty += 1) {
     add(qty);
   }
   for (let delta = -Q_THRESHOLD_NEAR; delta <= Q_THRESHOLD_NEAR; delta += 1) {
@@ -247,12 +295,10 @@ function qCandidates(remItems: number, params: Params): number[] {
   for (const coupon of coupons) {
     if (coupon.minTotal > 0 && coupon.discount > 0 && coupon.count > 0) {
       const couponThresholdQty = Math.ceil(coupon.minTotal / params.unitPriceTaxIn);
-      for (let delta = -Q_THRESHOLD_NEAR; delta <= Q_THRESHOLD_NEAR; delta += 1) {
-        add(couponThresholdQty + delta);
-      }
+      add(couponThresholdQty);
     }
   }
-  for (let offset = 0; offset <= Math.min(Q_TAIL_WINDOW, remItems - 1); offset += 1) {
+  for (let offset = 0; offset <= Math.min(tailWindow, remItems - 1); offset += 1) {
     add(remItems - offset);
   }
   add(remItems);
@@ -346,16 +392,25 @@ function maxFutureCouponDiscount(
 function couponActions(coupons: Coupon[], counts: number[], orderTotal: number): CouponAction[] {
   const actions: CouponAction[] = [{ nextCounts: counts, discount: 0, label: null }];
 
+  const eligible: Array<{ index: number; discount: number }> = [];
   for (let index = 0; index < coupons.length; index += 1) {
-    const coupon = coupons[index];
-    if (counts[index] <= 0 || orderTotal < coupon.minTotal) {
-      continue;
+    if (counts[index] > 0 && orderTotal >= coupons[index].minTotal) {
+      eligible.push({ index, discount: Math.min(coupons[index].discount, orderTotal) });
     }
+  }
+
+  // Sort by discount descending and keep top candidates
+  eligible.sort((a, b) => b.discount - a.discount);
+  const limit = Math.min(eligible.length, MAX_COUPON_ACTIONS - 1);
+
+  for (let i = 0; i < limit; i += 1) {
+    const { index, discount } = eligible[i];
     const nextCounts = counts.slice();
     nextCounts[index] -= 1;
+    const coupon = coupons[index];
     actions.push({
       nextCounts,
-      discount: Math.min(coupon.discount, orderTotal),
+      discount,
       label: `${coupon.minTotal.toLocaleString()}円以上で${coupon.discount.toLocaleString()}円引き`,
     });
   }
@@ -658,11 +713,12 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
   const cashCandidateCache = new Map<string, number[]>();
   const keepLowerPointsOnTie = params.objective === "min_cash_then_min_leftover";
   let bestKnownCost = greedyUpperBound(n, startPointBalance, startCouponCounts, unitPrice, coupons);
+  const limits = computeLimits(n, coupons.length);
 
   const layers: Map<string, Map<number, LayerEntry>>[] = Array.from({ length: n + 1 }, () => new Map());
   const frontiers: Map<string, Frontier>[] = Array.from({ length: n + 1 }, () => new Map());
   layers[0].set(startCouponKey, new Map([[startPointBalance, { cost: 0, parent: null }]]));
-  frontiers[0].set(startCouponKey, new Frontier());
+  frontiers[0].set(startCouponKey, new Frontier(limits.maxFrontierSize));
   frontiers[0].get(startCouponKey)?.insert(startPointBalance, 0, keepLowerPointsOnTie);
 
   let didTimeout = false;
@@ -680,7 +736,24 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
       continue;
     }
 
-    const quantities = qCandidates(n - purchased, params);
+    // Prune source layer if too many coupon states
+    if (currentLayer.size > limits.maxCouponStates) {
+      const ranked: Array<{ key: string; minCost: number }> = [];
+      for (const [key, pointEntries] of currentLayer) {
+        let minC = Number.POSITIVE_INFINITY;
+        for (const entry of pointEntries.values()) {
+          if (entry.cost < minC) minC = entry.cost;
+        }
+        ranked.push({ key, minCost: minC });
+      }
+      ranked.sort((a, b) => a.minCost - b.minCost);
+      for (let i = limits.maxCouponStates; i < ranked.length; i += 1) {
+        currentLayer.delete(ranked[i].key);
+        frontiers[purchased].delete(ranked[i].key);
+      }
+    }
+
+    const quantities = qCandidates(n - purchased, params, limits);
     for (let quantityIndex = quantities.length - 1; quantityIndex >= 0; quantityIndex -= 1) {
       const qty = quantities[quantityIndex];
       const nextPurchased = purchased + qty;
@@ -786,23 +859,25 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
                   continue;
                 }
 
-                const normalizedNextState = getCouponStateData(nextCouponKey, couponStateCache);
-                if (
-                  isDominatedAcrossCouponStates(
-                    nextFrontiers,
-                    normalizedNextState,
-                    nextCouponKey,
-                    nextPointBalance,
-                    nextCost,
-                    keepLowerPointsOnTie,
-                    couponStateCache
-                  )
-                ) {
-                  continue;
+                if (nextFrontiers.size > 1 && nextFrontiers.size <= 8) {
+                  const normalizedNextState = getCouponStateData(nextCouponKey, couponStateCache);
+                  if (
+                    isDominatedAcrossCouponStates(
+                      nextFrontiers,
+                      normalizedNextState,
+                      nextCouponKey,
+                      nextPointBalance,
+                      nextCost,
+                      keepLowerPointsOnTie,
+                      couponStateCache
+                    )
+                  ) {
+                    continue;
+                  }
                 }
 
                 if (!frontier) {
-                  frontier = new Frontier();
+                  frontier = new Frontier(limits.maxFrontierSize);
                   nextFrontiers.set(nextCouponKey, frontier);
                 }
                 if (!frontier.insert(nextPointBalance, nextCost, keepLowerPointsOnTie)) {
@@ -842,6 +917,32 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
       if (didTimeout) break;
     }
     if (didTimeout) break;
+
+    // Prune coupon states in destination layers that have too many states
+    const touchedLayers = new Set<number>();
+    for (const qty of quantities) {
+      touchedLayers.add(purchased + qty);
+    }
+    for (const layerIdx of touchedLayers) {
+      if (layerIdx > n) continue;
+      const layer = layers[layerIdx];
+      if (layer.size <= limits.maxCouponStates) continue;
+
+      const ranked: Array<{ key: string; minCost: number }> = [];
+      for (const [key, pointEntries] of layer) {
+        let minC = Number.POSITIVE_INFINITY;
+        for (const entry of pointEntries.values()) {
+          if (entry.cost < minC) minC = entry.cost;
+        }
+        ranked.push({ key, minCost: minC });
+      }
+      ranked.sort((a, b) => a.minCost - b.minCost);
+
+      for (let i = limits.maxCouponStates; i < ranked.length; i += 1) {
+        layer.delete(ranked[i].key);
+        frontiers[layerIdx].delete(ranked[i].key);
+      }
+    }
   }
 
   const finalLayer = layers[n];
@@ -938,7 +1039,7 @@ export function solve(n: number, params: Params, startPoints = 0, includeSuggest
     },
     orders,
     meta: {
-      exact: true,
+      exact: limits.maxFrontierSize === Infinity,
       timeMs: Date.now() - startedAt,
     },
   };
