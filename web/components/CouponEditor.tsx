@@ -1,6 +1,7 @@
 "use client";
 
 import type { CouponDraft } from "@/lib/coupon-form";
+import { COUPON_PRESETS } from "@/lib/coupon-form";
 
 interface Props {
   coupons: CouponDraft[];
@@ -25,6 +26,10 @@ export default function CouponEditor({
     onChange([...coupons, { minTotal: "", discount: "", count: "1" }]);
   }
 
+  function addPreset(minTotal: number, discount: number) {
+    onChange([...coupons, { minTotal: String(minTotal), discount: String(discount), count: "1" }]);
+  }
+
   function removeRow(index: number) {
     const next = coupons.slice();
     next.splice(index, 1);
@@ -33,79 +38,89 @@ export default function CouponEditor({
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <label className="block text-xs font-medium text-gray-500">{label}</label>
-        <button
-          type="button"
-          onClick={addRow}
-          className="rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-gray-700"
-        >
-          クーポンを追加
-        </button>
+      <label className="block text-xs font-medium text-gray-500">{label}</label>
+
+      {/* プリセット */}
+      <div>
+        <p className="mb-1.5 text-[11px] text-gray-400">よく使うクーポン</p>
+        <div className="flex flex-wrap gap-1.5">
+          {COUPON_PRESETS.map((preset) => (
+            <button
+              key={`${preset.minTotal}-${preset.discount}`}
+              type="button"
+              onClick={() => addPreset(preset.minTotal, preset.discount)}
+              className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-[11px] font-medium text-blue-700 transition-colors hover:bg-blue-100 whitespace-pre-line text-left leading-tight"
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {coupons.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-gray-300 bg-white px-4 py-5 text-sm text-gray-400">
-          通常クーポンは未登録です。
-        </div>
-      ) : (
-        <div className="space-y-2">
+      {/* 追加済みクーポン一覧 */}
+      {coupons.length > 0 && (
+        <div className="space-y-1.5">
+          {/* ヘッダー */}
+          <div className="grid grid-cols-12 gap-1 px-1">
+            <span className="col-span-5 text-[10px] text-gray-400">税込金額以上</span>
+            <span className="col-span-4 text-[10px] text-gray-400">値引き額</span>
+            <span className="col-span-2 text-[10px] text-gray-400">枚数</span>
+          </div>
           {coupons.map((coupon, index) => (
-            <div key={index} className="rounded-lg border border-gray-200 bg-white p-3">
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-12">
-                <div className="sm:col-span-5">
-                  <label className="mb-1 block text-[11px] text-gray-500">税込み金額以上</label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      value={coupon.minTotal}
-                      min={0}
-                      onChange={(event) => updateRow(index, "minTotal", event.target.value)}
-                      className="w-full rounded-lg border border-gray-200 px-3 py-2 pr-8 text-right text-sm text-gray-900 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">円</span>
-                  </div>
-                </div>
-                <div className="sm:col-span-4">
-                  <label className="mb-1 block text-[11px] text-gray-500">値引き額</label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      value={coupon.discount}
-                      min={1}
-                      onChange={(event) => updateRow(index, "discount", event.target.value)}
-                      className="w-full rounded-lg border border-gray-200 px-3 py-2 pr-8 text-right text-sm text-gray-900 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">円</span>
-                  </div>
-                </div>
-                <div className="sm:col-span-3">
-                  <label className="mb-1 block text-[11px] text-gray-500">枚数</label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      value={coupon.count}
-                      min={1}
-                      onChange={(event) => updateRow(index, "count", event.target.value)}
-                      className="w-full rounded-lg border border-gray-200 px-3 py-2 pr-8 text-right text-sm text-gray-900 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">枚</span>
-                  </div>
-                </div>
+            <div key={index} className="grid grid-cols-12 items-center gap-1">
+              <div className="relative col-span-5">
+                <input
+                  type="number"
+                  value={coupon.minTotal}
+                  min={0}
+                  placeholder="1000"
+                  onChange={(event) => updateRow(index, "minTotal", event.target.value)}
+                  className="w-full rounded-md border border-gray-200 px-2 py-1.5 pr-7 text-right text-xs text-gray-900 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-gray-400">円</span>
               </div>
-              <div className="mt-2 flex justify-end">
-                <button
-                  type="button"
-                  onClick={() => removeRow(index)}
-                  className="rounded-lg px-2 py-2 text-xs text-gray-400 transition-colors hover:bg-gray-100 hover:text-red-500"
-                >
-                  削除
-                </button>
+              <div className="relative col-span-4">
+                <input
+                  type="number"
+                  value={coupon.discount}
+                  min={1}
+                  placeholder="100"
+                  onChange={(event) => updateRow(index, "discount", event.target.value)}
+                  className="w-full rounded-md border border-gray-200 px-2 py-1.5 pr-7 text-right text-xs text-gray-900 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-gray-400">円</span>
               </div>
+              <div className="relative col-span-2">
+                <input
+                  type="number"
+                  value={coupon.count}
+                  min={1}
+                  onChange={(event) => updateRow(index, "count", event.target.value)}
+                  className="w-full rounded-md border border-gray-200 px-2 py-1.5 pr-5 text-right text-xs text-gray-900 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-gray-400">枚</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => removeRow(index)}
+                className="col-span-1 flex h-6 w-6 items-center justify-center rounded text-gray-300 transition-colors hover:bg-gray-100 hover:text-red-400"
+                aria-label="削除"
+              >
+                ✕
+              </button>
             </div>
           ))}
         </div>
       )}
+
+      {/* 手動追加ボタン */}
+      <button
+        type="button"
+        onClick={addRow}
+        className="text-xs text-gray-400 transition-colors hover:text-gray-600"
+      >
+        + 手動で追加
+      </button>
 
       <div className="rounded-lg border border-gray-200 bg-white p-3 text-xs text-gray-500">
         1注文につき通常クーポンは1枚まで使えます。HMVスペシャルクーポンとの同時利用はしません。

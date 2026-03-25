@@ -1,5 +1,12 @@
 import type { Coupon } from "@/types";
 
+export const COUPON_PRESETS: { label: string; minTotal: number; discount: number }[] = [
+  { label: "500円以上\n100円引き", minTotal: 500, discount: 100 },
+  { label: "1000円以上\n100円引き", minTotal: 1000, discount: 100 },
+  { label: "2000円以上\n200円引き", minTotal: 2000, discount: 200 },
+  { label: "5000円以上\n500円引き", minTotal: 5000, discount: 500 },
+];
+
 export type CouponDraft = {
   minTotal: string;
   discount: string;
