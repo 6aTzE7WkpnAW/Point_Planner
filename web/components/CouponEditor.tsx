@@ -48,32 +48,36 @@ export default function CouponEditor({
             <div key={index} className="grid grid-cols-12 items-center gap-1">
               <div className="relative col-span-5">
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
                   value={coupon.minTotal}
-                  min={0}
                   placeholder="1000"
-                  onChange={(event) => updateRow(index, "minTotal", event.target.value)}
+                  onChange={(event) => updateRow(index, "minTotal", event.target.value.replace(/[^0-9]/g, ""))}
                   className="w-full rounded-md border border-gray-200 px-2 py-1.5 pr-7 text-right text-xs text-gray-900 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-gray-400">円</span>
               </div>
               <div className="relative col-span-4">
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
                   value={coupon.discount}
-                  min={1}
                   placeholder="100"
-                  onChange={(event) => updateRow(index, "discount", event.target.value)}
+                  onChange={(event) => updateRow(index, "discount", event.target.value.replace(/[^0-9]/g, ""))}
                   className="w-full rounded-md border border-gray-200 px-2 py-1.5 pr-7 text-right text-xs text-gray-900 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-gray-400">円</span>
               </div>
               <div className="relative col-span-2">
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
                   value={coupon.count}
-                  min={1}
-                  onChange={(event) => updateRow(index, "count", event.target.value)}
+                  placeholder="1"
+                  onChange={(event) => updateRow(index, "count", event.target.value.replace(/[^0-9]/g, ""))}
                   className="w-full rounded-md border border-gray-200 px-2 py-1.5 pr-5 text-right text-xs text-gray-900 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-gray-400">枚</span>
