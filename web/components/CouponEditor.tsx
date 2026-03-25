@@ -37,55 +37,54 @@ export default function CouponEditor({
 
       {/* 追加済みクーポン一覧 */}
       {coupons.length > 0 && (
-        <div className="space-y-1.5">
-          {/* ヘッダー */}
-          <div className="grid grid-cols-12 gap-1 px-1">
-            <span className="col-span-5 text-[10px] text-gray-400">税込金額以上</span>
-            <span className="col-span-4 text-[10px] text-gray-400">値引き額</span>
-            <span className="col-span-2 text-[10px] text-gray-400">枚数</span>
-          </div>
+        <div className="space-y-2">
           {coupons.map((coupon, index) => (
-            <div key={index} className="grid grid-cols-12 items-center gap-1">
-              <div className="relative col-span-5">
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  value={coupon.minTotal}
-                  placeholder="1000"
-                  onChange={(event) => updateRow(index, "minTotal", event.target.value.replace(/[^0-9]/g, ""))}
-                  className="w-full rounded-md border border-gray-200 px-2 py-1.5 pr-7 text-right text-xs text-gray-900 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-gray-400">円</span>
-              </div>
-              <div className="relative col-span-4">
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  value={coupon.discount}
-                  placeholder="100"
-                  onChange={(event) => updateRow(index, "discount", event.target.value.replace(/[^0-9]/g, ""))}
-                  className="w-full rounded-md border border-gray-200 px-2 py-1.5 pr-7 text-right text-xs text-gray-900 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-gray-400">円</span>
-              </div>
-              <div className="relative col-span-2">
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  value={coupon.count}
-                  placeholder="1"
-                  onChange={(event) => updateRow(index, "count", event.target.value.replace(/[^0-9]/g, ""))}
-                  className="w-full rounded-md border border-gray-200 px-2 py-1.5 pr-5 text-right text-xs text-gray-900 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-gray-400">枚</span>
+            <div key={index} className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white p-2">
+              <div className="flex flex-1 flex-col gap-1.5">
+                <div className="flex items-center gap-1">
+                  <label className="shrink-0 text-[11px] text-gray-400 w-12">金額以上</label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={coupon.minTotal}
+                    placeholder="1000"
+                    onChange={(event) => updateRow(index, "minTotal", event.target.value.replace(/[^0-9]/g, ""))}
+                    className="w-full rounded-md border border-gray-200 px-2 py-2 text-right text-base text-gray-900 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <span className="shrink-0 text-xs text-gray-400">円</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <label className="shrink-0 text-[11px] text-gray-400 w-12">値引き</label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={coupon.discount}
+                    placeholder="100"
+                    onChange={(event) => updateRow(index, "discount", event.target.value.replace(/[^0-9]/g, ""))}
+                    className="w-full rounded-md border border-gray-200 px-2 py-2 text-right text-base text-gray-900 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <span className="shrink-0 text-xs text-gray-400">円</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <label className="shrink-0 text-[11px] text-gray-400 w-12">枚数</label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={coupon.count}
+                    placeholder="1"
+                    onChange={(event) => updateRow(index, "count", event.target.value.replace(/[^0-9]/g, ""))}
+                    className="w-full rounded-md border border-gray-200 px-2 py-2 text-right text-base text-gray-900 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <span className="shrink-0 text-xs text-gray-400">枚</span>
+                </div>
               </div>
               <button
                 type="button"
                 onClick={() => removeRow(index)}
-                className="col-span-1 flex h-6 w-6 items-center justify-center rounded text-gray-300 transition-colors hover:bg-gray-100 hover:text-red-400"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-gray-300 transition-colors hover:bg-gray-100 hover:text-red-400"
                 aria-label="削除"
               >
                 ✕
@@ -98,7 +97,7 @@ export default function CouponEditor({
       <button
         type="button"
         onClick={addRow}
-        className="text-xs text-gray-400 transition-colors hover:text-gray-600"
+        className="rounded-lg border border-dashed border-gray-300 px-4 py-2.5 text-sm text-gray-400 transition-colors hover:border-gray-400 hover:text-gray-600 w-full"
       >
         + クーポンを追加
       </button>
