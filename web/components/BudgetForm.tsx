@@ -90,8 +90,13 @@ export default function BudgetForm({ onSubmit, loading, initialParams }: Props) 
         </button>
       </div>
 
-      <button type="button" onClick={() => setShowSettings((value) => !value)} className="text-sm text-gray-400 transition-colors hover:text-gray-600">
+      <button type="button" onClick={() => setShowSettings((value) => !value)} className="flex items-center gap-1.5 text-sm text-gray-400 transition-colors hover:text-gray-600">
         {showSettings ? "詳細設定を閉じる" : "詳細設定"}
+        {!showSettings && couponDrafts.length > 0 && (
+          <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-600">
+            クーポン {couponDrafts.length}枚
+          </span>
+        )}
       </button>
 
       {showSettings && (

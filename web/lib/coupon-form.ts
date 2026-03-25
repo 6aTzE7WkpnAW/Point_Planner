@@ -1,5 +1,6 @@
 import type { Coupon } from "@/types";
 
+
 export type CouponDraft = {
   minTotal: string;
   discount: string;
