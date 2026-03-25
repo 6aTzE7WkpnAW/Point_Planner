@@ -1,7 +1,6 @@
 "use client";
 
 import type { CouponDraft } from "@/lib/coupon-form";
-import { COUPON_PRESETS } from "@/lib/coupon-form";
 
 interface Props {
   coupons: CouponDraft[];
@@ -26,10 +25,6 @@ export default function CouponEditor({
     onChange([...coupons, { minTotal: "", discount: "", count: "1" }]);
   }
 
-  function addPreset(minTotal: number, discount: number) {
-    onChange([...coupons, { minTotal: String(minTotal), discount: String(discount), count: "1" }]);
-  }
-
   function removeRow(index: number) {
     const next = coupons.slice();
     next.splice(index, 1);
@@ -39,23 +34,6 @@ export default function CouponEditor({
   return (
     <div className="space-y-3">
       <label className="block text-xs font-medium text-gray-500">{label}</label>
-
-      {/* プリセット */}
-      <div>
-        <p className="mb-1.5 text-[11px] text-gray-400">よく使うクーポン</p>
-        <div className="flex flex-wrap gap-1.5">
-          {COUPON_PRESETS.map((preset) => (
-            <button
-              key={`${preset.minTotal}-${preset.discount}`}
-              type="button"
-              onClick={() => addPreset(preset.minTotal, preset.discount)}
-              className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-[11px] font-medium text-blue-700 transition-colors hover:bg-blue-100 whitespace-pre-line text-left leading-tight"
-            >
-              {preset.label}
-            </button>
-          ))}
-        </div>
-      </div>
 
       {/* 追加済みクーポン一覧 */}
       {coupons.length > 0 && (
@@ -113,13 +91,12 @@ export default function CouponEditor({
         </div>
       )}
 
-      {/* 手動追加ボタン */}
       <button
         type="button"
         onClick={addRow}
         className="text-xs text-gray-400 transition-colors hover:text-gray-600"
       >
-        + 手動で追加
+        + クーポンを追加
       </button>
 
       <div className="rounded-lg border border-gray-200 bg-white p-3 text-xs text-gray-500">
